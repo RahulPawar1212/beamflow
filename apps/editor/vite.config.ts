@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
@@ -18,5 +19,11 @@ export default defineConfig({
         changeOrigin: true,
       },
     },
+  },
+  // Unit tests (Vitest). The API client test only mocks `fetch`, so the plain
+  // Node environment suffices — no jsdom needed.
+  test: {
+    environment: 'node',
+    include: ['src/**/*.test.ts'],
   },
 });

@@ -1,5 +1,13 @@
 /**
- * Map transform node — applies a transformation expression to each record.
+ * Map transform node (`beamflow:map`).
+ *
+ * Applies a Python expression to each record (add/modify fields).
+ *
+ * - Category: Transform
+ * - Ports:    in → Input, out → Mapped
+ * - Settings: expression (required; `element` refers to the record),
+ *             outputField (optional; empty ⇒ replace whole record)
+ * - Emits IR: { operation: 'Map', stepType: Transform }; no imports.
  */
 
 import { NodeCategory, IRStepType } from '@beamflow/shared';

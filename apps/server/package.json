@@ -10,7 +10,7 @@
     "clean": "rimraf dist *.tsbuildinfo",
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run"
   },
   "dependencies": {
     "@beamflow/shared": "workspace:*",

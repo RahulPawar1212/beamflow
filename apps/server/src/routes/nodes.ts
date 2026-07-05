@@ -10,6 +10,7 @@ import type { NodeRegistry } from '@beamflow/core';
 import type { NodeCategory, INodeInstance, IConnection } from '@beamflow/shared';
 import { DAG } from '@beamflow/graph';
 import { buildIR } from '@beamflow/ir';
+import { notFound, badRequest } from '../errors.js';
 
 export async function nodeRoutes(
   app: FastifyInstance,
@@ -43,9 +44,7 @@ export async function nodeRoutes(
     async (req, reply) => {
       const definition = registry.get(req.params.type);
       if (!definition) {
-        return reply.status(404).send({
-          error: `Node type "${req.params.type}" not found.`,
-        });
+        throw notFound(`Node type "${req.params.type}" not found.`);
       }
 
       return reply.send({
@@ -101,7 +100,7 @@ export async function nodeRoutes(
   }>('/api/compile-subgraph', async (req, reply) => {
     const { nodes, connections } = req.body || { nodes: [], connections: [] };
     if (!Array.isArray(nodes) || nodes.length === 0) {
-      return reply.status(400).send({ error: 'No nodes provided.' });
+      throw badRequest('No nodes provided.');
     }
 
     try {
@@ -138,8 +137,8 @@ export async function nodeRoutes(
 
       return reply.send({ steps });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return reply.status(400).send({ error: message });
+      // IR build failures are client errors (invalid subgraph).
+      throw badRequest(error instanceof Error ? error.message : String(error));
     }
   });
 }

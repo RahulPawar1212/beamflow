@@ -13,6 +13,7 @@ import { executePipeline } from '@beamflow/execution';
 import { generateId, timestamp, SCHEMA_VERSION } from '@beamflow/shared';
 import type { SerializedWorkflow } from '@beamflow/shared';
 import type { IStorage } from '../storage.js';
+import { notFound, badRequest, ApiError } from '../errors.js';
 
 /** In-memory execution result cache. */
 const executionResults = new Map<string, unknown>();
@@ -45,7 +46,7 @@ export async function pipelineRoutes(
     async (req, reply) => {
       const workflow = await storage.get(req.params.id);
       if (!workflow) {
-        return reply.status(404).send({ error: 'Pipeline not found.' });
+        throw notFound('Pipeline not found.');
       }
       return reply.send(workflow);
     },
@@ -82,7 +83,7 @@ export async function pipelineRoutes(
     async (req, reply) => {
       const existing = await storage.get(req.params.id);
       if (!existing) {
-        return reply.status(404).send({ error: 'Pipeline not found.' });
+        throw notFound('Pipeline not found.');
       }
 
       const workflow = req.body as SerializedWorkflow;
@@ -107,7 +108,7 @@ export async function pipelineRoutes(
     async (req, reply) => {
       const deleted = await storage.delete(req.params.id);
       if (!deleted) {
-        return reply.status(404).send({ error: 'Pipeline not found.' });
+        throw notFound('Pipeline not found.');
       }
       return reply.status(204).send();
     },
@@ -121,7 +122,7 @@ export async function pipelineRoutes(
     async (req, reply) => {
       const workflow = await storage.get(req.params.id);
       if (!workflow) {
-        return reply.status(404).send({ error: 'Pipeline not found.' });
+        throw notFound('Pipeline not found.');
       }
 
       try {
@@ -132,10 +133,7 @@ export async function pipelineRoutes(
         const graphIssues = dag.validate(registry);
         const errors = graphIssues.filter((i) => i.severity === 'error');
         if (errors.length > 0) {
-          return reply.status(400).send({
-            error: 'Validation failed.',
-            issues: graphIssues,
-          });
+          throw badRequest('Validation failed.', graphIssues);
         }
 
         // 3. Build IR
@@ -146,10 +144,7 @@ export async function pipelineRoutes(
         // 4. Validate IR
         const irErrors = validateIR(ir);
         if (irErrors.length > 0) {
-          return reply.status(400).send({
-            error: 'IR validation failed.',
-            issues: irErrors,
-          });
+          throw badRequest('IR validation failed.', irErrors);
         }
 
         // 5. Optimize IR
@@ -165,9 +160,10 @@ export async function pipelineRoutes(
           requirements: generated.requirements,
         });
       } catch (error) {
-        const message =
-          error instanceof Error ? error.message : String(error);
-        return reply.status(500).send({ error: message });
+        // Preserve intentional client errors (validation); everything else is
+        // an unexpected server fault → 500 via the error handler.
+        if (error instanceof ApiError) throw error;
+        throw new ApiError(500, error instanceof Error ? error.message : String(error));
       }
     },
   );
@@ -180,7 +176,7 @@ export async function pipelineRoutes(
     async (req, reply) => {
       const workflow = await storage.get(req.params.id);
       if (!workflow) {
-        return reply.status(404).send({ error: 'Pipeline not found.' });
+        throw notFound('Pipeline not found.');
       }
 
       try {
@@ -198,9 +194,8 @@ export async function pipelineRoutes(
 
         return reply.send(result);
       } catch (error) {
-        const message =
-          error instanceof Error ? error.message : String(error);
-        return reply.status(500).send({ error: message });
+        if (error instanceof ApiError) throw error;
+        throw new ApiError(500, error instanceof Error ? error.message : String(error));
       }
     },
   );
@@ -211,7 +206,7 @@ export async function pipelineRoutes(
     async (req, reply) => {
       const result = executionResults.get(req.params.execId);
       if (!result) {
-        return reply.status(404).send({ error: 'Execution not found.' });
+        throw notFound('Execution not found.');
       }
       return reply.send(result);
     },

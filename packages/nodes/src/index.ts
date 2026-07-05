@@ -27,8 +27,28 @@ import { groupBy } from './transforms/group-by.js';
 import { csvOutput } from './outputs/csv-output.js';
 
 /**
+ * Every built-in node, in palette order.
+ *
+ * This is the single source of truth for the built-in node set. To add a new
+ * built-in node: create its file under `sources/`, `transforms/`, or
+ * `outputs/`, import it above, and add it to this array — registration is then
+ * automatic (see `builtinNodesPlugin.register` below). No other edits needed.
+ */
+export const builtinNodes: INodeDefinition[] = [
+  // Sources
+  csvSource,
+  jsonSource,
+  // Transforms
+  filter,
+  map,
+  groupBy,
+  // Outputs
+  csvOutput,
+];
+
+/**
  * The built-in nodes plugin.
- * Registers all 6 MVP node types with the registry.
+ * Registers every node in {@link builtinNodes} with the registry.
  */
 export const builtinNodesPlugin: IPlugin = {
   name: '@beamflow/builtin-nodes',
@@ -37,17 +57,9 @@ export const builtinNodesPlugin: IPlugin = {
     'Built-in source, transform, and output nodes for BeamFlow pipelines.',
 
   register(registerNode) {
-    // Sources
-    registerNode(csvSource);
-    registerNode(jsonSource);
-
-    // Transforms
-    registerNode(filter);
-    registerNode(map);
-    registerNode(groupBy);
-
-    // Outputs
-    registerNode(csvOutput);
+    for (const node of builtinNodes) {
+      registerNode(node);
+    }
   },
 };
 

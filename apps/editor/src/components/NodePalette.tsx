@@ -117,24 +117,39 @@ export function NodePalette() {
     event.dataTransfer.effectAllowed = 'move';
   };
 
-  // Click-to-add: place near the viewport center, cascading each successive
-  // node down-right so repeated adds don't stack on top of each other.
+  // Click-to-add placement.
+  //
+  // We deliberately anchor to EXISTING node positions (stable flow
+  // coordinates), not the viewport center. `fitView` re-zooms/re-centers the
+  // canvas after each add, so `screenToFlowPosition(center)` is a moving target
+  // and consecutive adds would otherwise land almost on top of each other.
+  //
+  // Node footprint in flow units is ~260w × ~130h; gaps below exceed that so
+  // nodes never overlap. Column wraps every 4 rows to keep a column on screen.
+  const NODE_W = 260;
+  const NODE_H = 130;
+  const ROW_GAP = NODE_H + 60; // 190
+  const COL_GAP = NODE_W + 100; // 360
+  const ROWS_PER_COL = 4;
+
   const onAddNode = (nodeType: string) => {
-    const count = useWorkflowStore.getState().nodes.length;
-    const base = screenToFlowPosition({
-      x: window.innerWidth / 2,
-      y: window.innerHeight / 2,
-    });
-    // Cascade in a diagonal so nodes never land on top of each other,
-    // wrapping every 5 nodes into a fresh column.
-    const colGap = 300;
-    const rowGap = 90;
-    const col = Math.floor(count / 5);
-    const row = count % 5;
-    const pos = {
-      x: base.x - 90 + col * colGap,
-      y: base.y - 120 + row * rowGap,
-    };
+    const nodes = useWorkflowStore.getState().nodes;
+
+    let pos: { x: number; y: number };
+    if (nodes.length === 0) {
+      // First node: drop near the current viewport center.
+      const base = screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
+      pos = { x: base.x - NODE_W / 2, y: base.y - NODE_H / 2 };
+    } else {
+      // Anchor the grid to the top-left-most existing node so the whole cluster
+      // stays coherent, then cascade by the node count.
+      const minX = Math.min(...nodes.map((n) => n.position.x));
+      const minY = Math.min(...nodes.map((n) => n.position.y));
+      const i = nodes.length;
+      const col = Math.floor(i / ROWS_PER_COL);
+      const row = i % ROWS_PER_COL;
+      pos = { x: minX + col * COL_GAP, y: minY + row * ROW_GAP };
+    }
     addNode(nodeType, pos);
   };
 

@@ -114,7 +114,7 @@ function BaseNode({ id, data, selected }: NodeProps) {
   return (
     <div
       className={`
-        group/node relative min-w-[188px] overflow-hidden rounded-xl border backdrop-blur-sm
+        group/node relative w-[260px] overflow-hidden rounded-2xl border backdrop-blur-sm
         transition-all duration-200 cursor-pointer
         ${colors.bg} ${colors.border}
         ${
@@ -126,7 +126,7 @@ function BaseNode({ id, data, selected }: NodeProps) {
       onClick={() => setSelected(id)}
     >
       {/* Category accent bar */}
-      <div className={`h-1 w-full bg-gradient-to-r ${colors.bar}`} />
+      <div className={`h-1.5 w-full bg-gradient-to-r ${colors.bar}`} />
 
       {/* Input handle */}
       {hasInputs && (
@@ -134,23 +134,23 @@ function BaseNode({ id, data, selected }: NodeProps) {
           type="target"
           position={Position.Left}
           id="in"
-          className="!w-3 !h-3 !border-2 !bg-slate-300 !border-slate-500 transition-transform hover:!scale-125"
+          className="!w-3.5 !h-3.5 !border-2 !bg-slate-300 !border-slate-500 transition-transform hover:!scale-125"
         />
       )}
 
       {/* Node content */}
-      <div className="px-3 py-2.5">
-        <div className="flex items-center gap-2.5">
+      <div className="px-4 py-3.5">
+        <div className="flex items-center gap-3">
           <div
-            className={`flex-shrink-0 p-1.5 rounded-lg bg-gradient-to-br ring-1 ${colors.chip} ${colors.accent}`}
+            className={`flex-shrink-0 p-2.5 rounded-xl bg-gradient-to-br ring-1 ${colors.chip} ${colors.accent}`}
           >
-            <Icon size={16} />
+            <Icon size={22} />
           </div>
           <div className="flex-1 min-w-0">
-            <div className="text-xs font-semibold text-gray-200 truncate">
+            <div className="text-[15px] font-semibold text-gray-200 truncate leading-tight">
               {nodeData.label}
             </div>
-            <div className="text-[10px] text-gray-500 capitalize tracking-wide">
+            <div className="text-[11px] text-gray-500 capitalize tracking-wide mt-0.5">
               {nodeData.category}
             </div>
           </div>
@@ -163,7 +163,7 @@ function BaseNode({ id, data, selected }: NodeProps) {
           type="source"
           position={Position.Right}
           id="out"
-          className="!w-3 !h-3 !border-2 !bg-slate-300 !border-slate-500 transition-transform hover:!scale-125"
+          className="!w-3.5 !h-3.5 !border-2 !bg-slate-300 !border-slate-500 transition-transform hover:!scale-125"
         />
       )}
     </div>

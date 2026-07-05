@@ -117,6 +117,10 @@ export function Canvas() {
         onNodeClick={onNodeClick}
         onPaneClick={onPaneClick}
         fitView
+        fitViewOptions={{ maxZoom: 0.85, minZoom: 0.4, padding: 0.3 }}
+        defaultViewport={{ x: 0, y: 0, zoom: 0.85 }}
+        minZoom={0.2}
+        maxZoom={1.5}
         snapToGrid
         snapGrid={[16, 16]}
         deleteKeyCode={['Delete', 'Backspace']}

@@ -131,7 +131,7 @@ export function Canvas() {
           variant={BackgroundVariant.Dots}
           gap={20}
           size={1}
-          color="rgba(100, 100, 140, 0.15)"
+          color="var(--grid-color)"
         />
         <Controls
           position="bottom-right"
@@ -152,7 +152,7 @@ export function Canvas() {
             };
             return colors[data?.category] || '#6366f1';
           }}
-          maskColor="rgba(10, 10, 15, 0.7)"
+          maskColor="var(--minimap-mask)"
           pannable
           zoomable
         />

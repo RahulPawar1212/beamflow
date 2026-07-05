@@ -6,6 +6,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   Save, Play, Code2, Undo2, Redo2, Download, Upload,
   Loader2, Zap, Copy, Check, X, CheckCircle2, XCircle, FileCode2,
+  Sun, Moon, SunDim,
 } from 'lucide-react';
 import { useWorkflowStore } from '../store/workflow-store';
 import { api } from '../api/client';
@@ -34,6 +35,8 @@ export function Toolbar() {
   const loadWorkflow = useWorkflowStore((s) => s.loadWorkflow);
   const setPipelineId = useWorkflowStore((s) => s.setPipelineId);
   const nodeCount = useWorkflowStore((s) => s.nodes.length);
+  const theme = useWorkflowStore((s) => s.theme);
+  const toggleTheme = useWorkflowStore((s) => s.toggleTheme);
 
   const [showCode, setShowCode] = useState(false);
 
@@ -251,6 +254,15 @@ export function Toolbar() {
           {/* Import/Export */}
           <ToolbarButton icon={Upload} label="Import" onClick={handleImport} />
           <ToolbarButton icon={Download} label="Export" onClick={handleExport} />
+
+          <div className="w-px h-5 bg-[var(--color-border)] mx-1" />
+
+          {/* Theme Switcher */}
+          <ToolbarButton
+            icon={theme === 'dark' ? Moon : theme === 'light' ? Sun : SunDim}
+            label={theme === 'dark' ? 'Dark' : theme === 'light' ? 'Light' : 'Softer Light'}
+            onClick={toggleTheme}
+          />
 
           <div className="w-px h-5 bg-[var(--color-border)] mx-1" />
 
@@ -519,7 +531,7 @@ function ToolbarButton({
     ? variant === 'success'
       ? 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20'
       : 'bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500/20'
-    : 'text-gray-500 hover:text-gray-300 hover:bg-white/5';
+    : 'text-gray-500 hover:text-gray-300 hover:bg-[var(--color-surface-200)]';
 
   return (
     <button

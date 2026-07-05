@@ -1,6 +1,8 @@
 @import "tailwindcss";
 @import "@xyflow/react/dist/style.css";
 
+@custom-variant light (&:where(.light, .light *, .mid, .mid *));
+
 /* ─── Design Tokens ──────────────────────────────────────────────── */
 @theme {
   --font-sans: "Inter", system-ui, -apple-system, sans-serif;
@@ -15,31 +17,134 @@
   --color-brand-600: #4f46e5;
   --color-brand-700: #4338ca;
 
-  /* Surface palette (dark mode first) */
-  --color-surface-0: #0a0a0f;
-  --color-surface-50: #0f0f17;
-  --color-surface-100: #151520;
-  --color-surface-200: #1c1c2b;
-  --color-surface-300: #252538;
-  --color-surface-400: #2f2f45;
-
-  /* Node category colors */
-  --color-node-source: #10b981;
-  --color-node-transform: #6366f1;
-  --color-node-arithmetic: #f59e0b;
-  --color-node-logical: #8b5cf6;
-  --color-node-output: #f97316;
-  --color-node-ml: #ec4899;
+  /* Surface palette */
+  --color-surface-0: var(--surface-0);
+  --color-surface-50: var(--surface-50);
+  --color-surface-100: var(--surface-100);
+  --color-surface-200: var(--surface-200);
+  --color-surface-300: var(--surface-300);
+  --color-surface-400: var(--surface-400);
 
   /* Semantic */
-  --color-text-primary: #f0f0f5;
-  --color-text-secondary: #9ca3af;
-  --color-text-muted: #6b7280;
-  --color-border: #2a2a3e;
-  --color-border-hover: #3b3b55;
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-muted: var(--text-muted);
+  --color-border: var(--border);
+  --color-border-hover: var(--border-hover);
   --color-success: #10b981;
   --color-error: #ef4444;
   --color-warning: #f59e0b;
+
+  /* Map gray colors so they are theme-aware */
+  --color-gray-50: var(--gray-50);
+  --color-gray-100: var(--gray-100);
+  --color-gray-200: var(--gray-200);
+  --color-gray-300: var(--gray-300);
+  --color-gray-400: var(--gray-400);
+  --color-gray-500: var(--gray-500);
+  --color-gray-600: var(--gray-600);
+  --color-gray-700: var(--gray-700);
+  --color-gray-800: var(--gray-800);
+  --color-gray-900: var(--gray-900);
+  --color-gray-950: var(--gray-950);
+}
+
+:root {
+  /* Default: Dark Theme */
+  --surface-0: #0a0a0f;
+  --surface-50: #0f0f17;
+  --surface-100: #151520;
+  --surface-200: #1c1c2b;
+  --surface-300: #252538;
+  --surface-400: #2f2f45;
+
+  --text-primary: #f0f0f5;
+  --text-secondary: #9ca3af;
+  --text-muted: #6b7280;
+  --border: #2a2a3e;
+  --border-hover: #3b3b55;
+  --bg-glass: rgba(15, 15, 23, 0.8);
+
+  --grid-color: rgba(100, 100, 140, 0.15);
+  --minimap-mask: rgba(10, 10, 15, 0.7);
+
+  --gray-50: #f9fafb;
+  --gray-100: #f3f4f6;
+  --gray-200: #e5e7eb;
+  --gray-300: #d1d5db;
+  --gray-400: #9ca3af;
+  --gray-500: #6b7280;
+  --gray-600: #4b5563;
+  --gray-700: #374151;
+  --gray-800: #1f2937;
+  --gray-900: #111827;
+  --gray-950: #030712;
+}
+
+html.light {
+  /* Light Theme */
+  --surface-0: #f1f5f9;      /* Softer slate-100 base background to reduce brightness */
+  --surface-50: #f8fafc;     /* slate-50 canvas background */
+  --surface-100: #ffffff;    /* white for main sidebar and cards to add depth */
+  --surface-200: #f1f5f9;    /* slate-100 hover/focus states */
+  --surface-300: #cbd5e1;    /* slate-300 */
+  --surface-400: #94a3b8;    /* slate-400 */
+
+  --text-primary: #0f172a;    /* slate-900 for premium readability */
+  --text-secondary: #334155;  /* slate-700 secondary text */
+  --text-muted: #5a6270;      /* slate-600 muted text (much higher contrast) */
+  --border: #cbd5e1;          /* slate-300 borders (more visible) */
+  --border-hover: #94a3b8;    /* slate-400 borders */
+  --bg-glass: rgba(255, 255, 255, 0.88);
+
+  --grid-color: rgba(60, 60, 90, 0.12);
+  --minimap-mask: rgba(200, 200, 210, 0.55);
+
+  /* Inverted gray scale with high contrast */
+  --gray-50: #0f172a;   /* slate-900 */
+  --gray-100: #1e293b;  /* slate-800 */
+  --gray-200: #2d3748;  /* dark grey */
+  --gray-300: #3f4e64;  /* slate-700 */
+  --gray-400: #4a5568;  /* slate-600 */
+  --gray-500: #5a6270;  /* slate-500 */
+  --gray-600: #718096;  /* slate-400 (visible details / icons) */
+  --gray-700: #cbd5e1;  /* slate-300 (light borders) */
+  --gray-800: #e2e8f0;  /* slate-200 (light containers) */
+  --gray-900: #f1f5f9;  /* slate-100 (light backgrounds) */
+  --gray-950: #f8fafc;  /* slate-50 */
+}
+
+html.mid {
+  /* Mid-level Light Theme (Slate/Dim Light) */
+  --surface-0: #cbd5e1;      /* slate-300 base background */
+  --surface-50: #d8e2ef;     /* slate-200 canvas background */
+  --surface-100: #f1f5f9;    /* slate-100 sidebar & panel cards */
+  --surface-200: #e2e8f0;    /* slate-200 hover states */
+  --surface-300: #cbd5e1;    /* slate-300 */
+  --surface-400: #94a3b8;    /* slate-400 */
+
+  --text-primary: #0f172a;    /* slate-900 */
+  --text-secondary: #1e293b;  /* slate-800 */
+  --text-muted: #475569;      /* slate-600 */
+  --border: #94a3b8;          /* slate-400 (more visible borders) */
+  --border-hover: #64748b;    /* slate-500 */
+  --bg-glass: rgba(241, 245, 249, 0.92);
+
+  --grid-color: rgba(60, 60, 90, 0.15);
+  --minimap-mask: rgba(180, 180, 190, 0.6);
+
+  /* Inverted gray scale for comfortable dim-light contrast */
+  --gray-50: #0f172a;   /* slate-900 */
+  --gray-100: #1e293b;  /* slate-800 */
+  --gray-200: #334155;  /* slate-700 */
+  --gray-300: #475569;  /* slate-600 */
+  --gray-400: #475569;  /* slate-600 */
+  --gray-500: #64748b;  /* slate-500 */
+  --gray-600: #64748b;  /* slate-500 */
+  --gray-700: #94a3b8;  /* slate-400 */
+  --gray-800: #cbd5e1;  /* slate-300 */
+  --gray-900: #e2e8f0;  /* slate-200 */
+  --gray-950: #f1f5f9;  /* slate-100 */
 }
 
 /* ─── Global Styles ──────────────────────────────────────────────── */
@@ -146,7 +251,7 @@ body {
 
 /* ─── Glassmorphism Utility ──────────────────────────────────────── */
 .glass {
-  background: rgba(15, 15, 23, 0.8);
+  background: var(--bg-glass);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
   border: 1px solid var(--color-border);

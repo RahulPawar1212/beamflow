@@ -148,7 +148,7 @@ export function NodePalette() {
   };
 
   return (
-    <div className="w-60 h-full glass flex flex-col animate-slide-left">
+    <div className="w-68 h-full glass flex flex-col animate-slide-left">
       {/* Header */}
       <div className="px-4 py-3 border-b border-[var(--color-border)]">
         <div className="flex items-center justify-between mb-2">
@@ -161,25 +161,22 @@ export function NodePalette() {
             <Plus size={12} /> New
           </button>
         </div>
-        <div className="relative">
+        <div className="flex items-center gap-2 px-3 py-1.5 bg-[var(--color-surface-200)] border border-[var(--color-border)] rounded-lg focus-within:border-indigo-500/50 transition-colors">
           <Search
             size={14}
-            className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-500"
+            className="text-gray-400 flex-shrink-0"
           />
           <input
             type="text"
             placeholder="Search nodes..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-8 pr-7 py-1.5 text-xs bg-[var(--color-surface-200)]
-              border border-[var(--color-border)] rounded-lg text-gray-300
-              placeholder-gray-600 outline-none focus:border-indigo-500/50
-              transition-colors"
+            className="flex-1 bg-transparent text-sm text-gray-300 placeholder-gray-500 outline-none"
           />
           {searchQuery && (
             <button
               onClick={() => setSearchQuery('')}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-600 hover:text-gray-300 transition-colors"
+              className="text-gray-600 hover:text-gray-300 transition-colors flex-shrink-0 cursor-pointer"
             >
               <X size={13} />
             </button>

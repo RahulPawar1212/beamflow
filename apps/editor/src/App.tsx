@@ -17,7 +17,13 @@ export default function App() {
   const setNodeDefinitions = useWorkflowStore((s) => s.setNodeDefinitions);
   const selectedNodeId = useWorkflowStore((s) => s.selectedNodeId);
   const addToast = useWorkflowStore((s) => s.addToast);
+  const initTheme = useWorkflowStore((s) => s.initTheme);
   const loadCustomNodeDefs = useWorkflowStore((s) => s.loadCustomNodeDefs);
+
+  // Initialize theme on mount
+  useEffect(() => {
+    initTheme();
+  }, [initTheme]);
 
   // Load user-authored custom nodes from localStorage on mount
   useEffect(() => {

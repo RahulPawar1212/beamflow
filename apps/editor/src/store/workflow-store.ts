@@ -88,8 +88,11 @@ interface WorkflowState {
   lastSavedAt: string | null;
   isDirty: boolean;
   toasts: Toast[];
+  theme: 'dark' | 'light' | 'mid';
 
   // Actions
+  toggleTheme: () => void;
+  initTheme: () => void;
   onNodesChange: OnNodesChange;
   onEdgesChange: OnEdgesChange;
   onConnect: OnConnect;
@@ -163,6 +166,37 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   lastSavedAt: null,
   isDirty: false,
   toasts: [],
+  theme: 'dark',
+
+  // ─── Theme Actions ──────────────────────────────────────────────
+
+  initTheme: () => {
+    const saved = localStorage.getItem('beamflow.theme') as 'dark' | 'light' | 'mid';
+    const systemPrefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    const theme = saved || (systemPrefersDark ? 'dark' : 'light');
+    set({ theme });
+    
+    document.documentElement.classList.remove('light', 'mid');
+    if (theme !== 'dark') {
+      document.documentElement.classList.add(theme);
+    }
+  },
+
+  toggleTheme: () => {
+    const current = get().theme;
+    let nextTheme: 'dark' | 'light' | 'mid' = 'dark';
+    if (current === 'dark') nextTheme = 'light';
+    else if (current === 'light') nextTheme = 'mid';
+    else nextTheme = 'dark';
+
+    localStorage.setItem('beamflow.theme', nextTheme);
+    set({ theme: nextTheme });
+    
+    document.documentElement.classList.remove('light', 'mid');
+    if (nextTheme !== 'dark') {
+      document.documentElement.classList.add(nextTheme);
+    }
+  },
 
   // ─── React Flow handlers ────────────────────────────────────────
 

@@ -1,5 +1,13 @@
 /**
- * CSV Output node — writes pipeline results to a CSV file.
+ * CSV Output node (`beamflow:csv-output`).
+ *
+ * Writes pipeline results to a CSV file (a sink — no output port).
+ *
+ * - Category: Output
+ * - Ports:    in → Records (no outputs)
+ * - Settings: filePath (required), delimiter, includeHeader (default true)
+ * - Emits IR: { operation: 'WriteToCSV', stepType: Write };
+ *             imports `apache_beam.io.WriteToText`.
  */
 
 import { NodeCategory, IRStepType } from '@beamflow/shared';

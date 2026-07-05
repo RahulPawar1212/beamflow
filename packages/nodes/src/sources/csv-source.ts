@@ -1,8 +1,14 @@
 /**
- * CSV Source node — reads data from a CSV file.
+ * CSV Source node (`beamflow:csv-source`).
  *
- * This is a reference implementation showing how to build a source node.
- * Every node is a self-contained definition implementing INodeDefinition.
+ * Reads a CSV file; each row becomes a record in the pipeline. Reference
+ * implementation for a source node — a self-contained `INodeDefinition`.
+ *
+ * - Category: Source
+ * - Ports:    out → Records (no inputs)
+ * - Settings: filePath (required), delimiter, hasHeader, encoding
+ * - Emits IR: { operation: 'ReadFromCSV', stepType: Read } with those params;
+ *             imports `apache_beam.io.ReadFromText`.
  */
 
 import { NodeCategory, IRStepType } from '@beamflow/shared';

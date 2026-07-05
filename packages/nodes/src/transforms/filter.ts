@@ -1,5 +1,13 @@
 /**
- * Filter transform node — filters records based on a field condition.
+ * Filter transform node (`beamflow:filter`).
+ *
+ * Keeps only records matching a field/operator/value condition.
+ *
+ * - Category: Transform
+ * - Ports:    in → Input, out → Filtered
+ * - Settings: field (required), operator (==, !=, >, <, >=, <=, contains,
+ *             regex, is_null), value (required unless operator is `is_null`)
+ * - Emits IR: { operation: 'Filter', stepType: Transform }; no imports.
  */
 
 import { NodeCategory, IRStepType } from '@beamflow/shared';

@@ -8,20 +8,51 @@ import {
   Search, FileText, ArrowRightLeft, Calculator, GitBranch,
   FileOutput, Brain, ChevronDown, ChevronRight, Plus, X,
   Sparkles, Pencil, Trash2,
+  FileJson, Filter, Group, Database, Box,
 } from 'lucide-react';
 import { useWorkflowStore } from '../store/workflow-store';
 import { isCustomType, type CustomNodeDef } from '../customNodes';
 import { CustomNodeModal } from './CustomNodeModal';
 import type { NodeDef } from '../api/client';
 
-const categoryDotColor: Record<string, string> = {
-  source: 'bg-emerald-400',
-  transform: 'bg-indigo-400',
-  arithmetic: 'bg-amber-400',
-  logical: 'bg-violet-400',
-  output: 'bg-orange-400',
-  ml: 'bg-pink-400',
-  custom: 'bg-cyan-400',
+// Icon chip styling per category: gradient fill + ring + icon tint.
+// Mirrors the on-canvas node colors so the palette and canvas read as one system.
+const categoryChip: Record<string, string> = {
+  source: 'bg-gradient-to-br from-emerald-500/25 to-emerald-500/5 ring-emerald-400/25 text-emerald-400',
+  transform: 'bg-gradient-to-br from-indigo-500/25 to-indigo-500/5 ring-indigo-400/25 text-indigo-400',
+  arithmetic: 'bg-gradient-to-br from-amber-500/25 to-amber-500/5 ring-amber-400/25 text-amber-400',
+  logical: 'bg-gradient-to-br from-violet-500/25 to-violet-500/5 ring-violet-400/25 text-violet-400',
+  output: 'bg-gradient-to-br from-orange-500/25 to-orange-500/5 ring-orange-400/25 text-orange-400',
+  ml: 'bg-gradient-to-br from-pink-500/25 to-pink-500/5 ring-pink-400/25 text-pink-400',
+  custom: 'bg-gradient-to-br from-cyan-500/25 to-cyan-500/5 ring-cyan-400/25 text-cyan-400',
+};
+
+// Flat icon tint for the (smaller, subtler) category header icons — a colored
+// dot of identity, distinct from the filled chips used on node rows below.
+const categoryIconColor: Record<string, string> = {
+  source: 'text-emerald-400',
+  transform: 'text-indigo-400',
+  arithmetic: 'text-amber-400',
+  logical: 'text-violet-400',
+  output: 'text-orange-400',
+  ml: 'text-pink-400',
+  custom: 'text-cyan-400',
+};
+
+// Per-node icon lookup by the node's declared `icon` name, matching the
+// canvas node icon set. Falls back to the category icon, then a generic box.
+const nodeIconMap: Record<string, React.ElementType> = {
+  'file-csv': FileText,
+  'file-json': FileJson,
+  'filter': Filter,
+  'arrow-right-left': ArrowRightLeft,
+  'group': Group,
+  'file-output': FileOutput,
+  'database': Database,
+  'box': Box,
+  'sparkles': Sparkles,
+  'brain': Brain,
+  'calculator': Calculator,
 };
 
 const categoryIcons: Record<string, React.ElementType> = {
@@ -190,7 +221,7 @@ export function NodePalette() {
       </div>
 
       {/* Node list */}
-      <div className="flex-1 overflow-y-auto px-2 py-2 space-y-1">
+      <div className="flex-1 overflow-y-auto px-3 py-3 flex flex-col gap-2">
         {categoryOrder.map((cat) => {
           const nodes = groupedNodes[cat];
           if (!nodes || nodes.length === 0) return null;
@@ -203,79 +234,92 @@ export function NodePalette() {
               {/* Category header */}
               <button
                 onClick={() => toggleCategory(cat)}
-                className="w-full flex items-center gap-2 px-2 py-1.5 text-xs font-medium
-                  text-gray-400 hover:text-gray-200 transition-colors rounded-md
-                  hover:bg-white/5"
+                className="w-full flex items-center gap-2 px-1 py-1 rounded-md
+                  text-gray-400 hover:text-gray-200 transition-colors group/cat"
               >
-                {isCollapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
-                <CatIcon size={12} />
-                <span className="capitalize">{categoryLabels[cat] || cat}</span>
-                <span className="ml-auto text-[10px] text-gray-600">{nodes.length}</span>
+                <ChevronRight
+                  size={12}
+                  className={`text-gray-600 transition-transform duration-200 ${isCollapsed ? '' : 'rotate-90'}`}
+                />
+                <CatIcon size={12} className={categoryIconColor[cat] || 'text-gray-400'} />
+                <span className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-gray-400">
+                  {categoryLabels[cat] || cat}
+                </span>
+                <span className="ml-auto text-[10px] font-medium text-gray-500 bg-white/5 rounded-full px-1.5 py-0.5 min-w-[18px] text-center">
+                  {nodes.length}
+                </span>
               </button>
 
               {/* Nodes in category */}
               {!isCollapsed && (
-                <div className="ml-2 space-y-0.5">
+                <div className="mt-1 flex flex-col gap-1">
                   {nodes.map((node) => {
                     const custom = isCustomType(node.type);
                     const def = custom
                       ? customNodeDefs.find((d) => d.id === node.type)
                       : undefined;
+                    const NodeIcon =
+                      nodeIconMap[node.icon] || categoryIcons[node.category] || Box;
                     return (
                       <div
                         key={node.type}
                         draggable
                         onDragStart={(e) => onDragStart(e, node.type)}
                         onDoubleClick={() => onAddNode(node.type)}
-                        title={node.description}
-                        className="flex items-center gap-2 px-2 py-1.5 rounded-md
-                          cursor-grab active:cursor-grabbing
-                          hover:bg-white/5 transition-colors group"
+                        title={`${node.name} — ${node.description}`}
+                        className="flex items-center gap-2.5 px-2.5 py-2 rounded-lg
+                          border border-transparent bg-[var(--color-surface-200)]/40
+                          cursor-grab active:cursor-grabbing active:scale-[0.98]
+                          hover:bg-[var(--color-surface-200)] hover:border-[var(--color-border-hover)] transition-all group"
                       >
                         <span
-                          className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${categoryDotColor[node.category] || 'bg-gray-500'}`}
-                        />
+                          className={`flex-shrink-0 p-1.5 rounded-lg ring-1 ${categoryChip[node.category] || categoryChip.transform}`}
+                        >
+                          <NodeIcon size={15} />
+                        </span>
                         <div className="flex-1 min-w-0">
-                          <div className="text-xs text-gray-300 truncate">
+                          <div className="text-[13px] font-medium text-gray-200 truncate leading-tight">
                             {node.name}
                           </div>
                           {node.description && (
-                            <div className="text-[10px] text-gray-600 truncate">
+                            <div className="text-[10.5px] text-gray-500 leading-snug mt-0.5 truncate">
                               {node.description}
                             </div>
                           )}
                         </div>
-                        {custom && def && (
-                          <>
-                            <button
-                              onClick={() => setModal(def)}
-                              title="Edit custom node"
-                              className="flex-shrink-0 p-0.5 rounded text-gray-600 opacity-0
-                                group-hover:opacity-100 hover:text-cyan-400 hover:bg-white/10 transition-all"
-                            >
-                              <Pencil size={12} />
-                            </button>
-                            <button
-                              onClick={() => {
-                                deleteCustomNode(def.id);
-                                addToast('info', `Deleted "${def.name}"`);
-                              }}
-                              title="Delete custom node"
-                              className="flex-shrink-0 p-0.5 rounded text-gray-600 opacity-0
-                                group-hover:opacity-100 hover:text-red-400 hover:bg-white/10 transition-all"
-                            >
-                              <Trash2 size={12} />
-                            </button>
-                          </>
-                        )}
-                        <button
-                          onClick={() => onAddNode(node.type)}
-                          title="Add to canvas"
-                          className="flex-shrink-0 p-0.5 rounded text-gray-600 opacity-0
-                            group-hover:opacity-100 hover:text-indigo-400 hover:bg-white/10 transition-all"
-                        >
-                          <Plus size={13} />
-                        </button>
+                        <div className="flex items-center gap-0.5 flex-shrink-0">
+                          {custom && def && (
+                            <>
+                              <button
+                                onClick={() => setModal(def)}
+                                title="Edit custom node"
+                                className="p-1 rounded-md text-gray-600 opacity-0
+                                  group-hover:opacity-100 hover:text-cyan-400 hover:bg-white/10 transition-all"
+                              >
+                                <Pencil size={12} />
+                              </button>
+                              <button
+                                onClick={() => {
+                                  deleteCustomNode(def.id);
+                                  addToast('info', `Deleted "${def.name}"`);
+                                }}
+                                title="Delete custom node"
+                                className="p-1 rounded-md text-gray-600 opacity-0
+                                  group-hover:opacity-100 hover:text-red-400 hover:bg-white/10 transition-all"
+                              >
+                                <Trash2 size={12} />
+                              </button>
+                            </>
+                          )}
+                          <button
+                            onClick={() => onAddNode(node.type)}
+                            title="Add to canvas"
+                            className="p-1 rounded-md text-gray-500 opacity-0
+                              group-hover:opacity-100 hover:text-indigo-400 hover:bg-indigo-500/15 transition-all"
+                          >
+                            <Plus size={14} />
+                          </button>
+                        </div>
                       </div>
                     );
                   })}
@@ -297,7 +341,7 @@ export function NodePalette() {
       </div>
 
       {/* Footer: custom-node sharing + hint */}
-      <div className="px-3 py-2 border-t border-[var(--color-border)] space-y-1.5">
+      <div className="px-3 py-2 border-t border-[var(--color-border)] flex flex-col gap-1.5">
         <div className="flex items-center gap-1">
           <button
             onClick={handleImportCustom}

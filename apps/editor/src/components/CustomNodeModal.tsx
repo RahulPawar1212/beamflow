@@ -7,8 +7,7 @@
  */
 
 import React, { useState, useMemo } from 'react';
-import { createPortal } from 'react-dom';
-import { X, Plus, Trash2, Boxes, Sparkles } from 'lucide-react';
+import { Plus, Trash2, Boxes, Sparkles } from 'lucide-react';
 import { nanoid } from 'nanoid';
 import {
   useWorkflowStore,
@@ -20,6 +19,24 @@ import {
   CUSTOM_NODE_PREFIX,
   resolveExpression,
 } from '../customNodes';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 
 const OPERATIONS: { value: CustomOperation; label: string; hint: string }[] = [
   { value: 'MapExpr', label: 'Map — transform each element', hint: 'Return the new element' },
@@ -100,159 +117,168 @@ export function CustomNodeModal({ editing, onClose }: Props) {
     onClose();
   };
 
-  return createPortal(
-    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[100] flex items-center justify-center p-4 sm:p-8" onClick={onClose}>
-      <div
-        className="w-full max-w-2xl max-h-[90vh] bg-[var(--color-surface-100)] rounded-2xl border border-[var(--color-border-hover)] flex flex-col animate-fade-in shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent
+        showCloseButton
+        className="max-w-2xl sm:max-w-2xl p-0 gap-0 max-h-[90vh] flex flex-col overflow-hidden"
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-[var(--color-border)]">
-          <div className="flex items-center gap-2">
-            <Sparkles size={17} className="text-cyan-400" />
-            <span className="text-[15px] font-semibold text-gray-100">
+        <DialogHeader className="px-5 sm:px-6 py-4 border-b border-border">
+          <DialogTitle className="flex items-center gap-2.5 text-[15px]">
+            <span className="flex-shrink-0 p-1.5 rounded-lg bg-gradient-to-br from-cyan-500/25 to-cyan-500/5 ring-1 ring-cyan-400/25 text-cyan-400">
+              <Sparkles size={16} />
+            </span>
+            <span className="truncate">
               {editing ? 'Edit Custom Node' : 'Create Custom Node'}
             </span>
             {isComposite && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/5 text-gray-500 flex items-center gap-1">
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground flex items-center gap-1 flex-shrink-0 font-normal">
                 <Boxes size={10} /> composite
               </span>
             )}
-          </div>
-          <button onClick={onClose} className="p-1.5 rounded-lg text-gray-500 hover:text-gray-300 hover:bg-white/10 transition-colors">
-            <X size={15} />
-          </button>
-        </div>
+          </DialogTitle>
+        </DialogHeader>
 
         {/* Body */}
-        <div className="flex-1 overflow-y-auto px-5 py-5 space-y-5">
-          {/* Name + icon */}
-          <div className="flex gap-3">
-            <div className="flex-1">
-              <Label>Name</Label>
-              <input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="e.g. Add Total Column"
-                className={inputCls}
-                autoFocus
-              />
+        <div className="flex-1 overflow-y-auto px-5 sm:px-6 py-5 flex flex-col gap-7">
+          {/* ── Basics ─────────────────────────────────────────── */}
+          <Section title="Basics">
+            {/* Name + icon: stack on narrow screens, side-by-side on wider */}
+            <div className="flex flex-col sm:flex-row gap-4">
+              <Field label="Name" className="flex-1">
+                <Input
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="e.g. Add Total Column"
+                  autoFocus
+                />
+              </Field>
+              <Field label="Icon" className="sm:w-40">
+                <Select value={icon} onValueChange={setIcon}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {ICONS.map((i) => (
+                      <SelectItem key={i} value={i}>{i}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
             </div>
-            <div>
-              <Label>Icon</Label>
-              <select value={icon} onChange={(e) => setIcon(e.target.value)} className={inputCls}>
-                {ICONS.map((i) => (
-                  <option key={i} value={i}>{i}</option>
-                ))}
-              </select>
-            </div>
-          </div>
 
-          <div>
-            <Label>Description</Label>
-            <input
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="What does this node do?"
-              className={inputCls}
-            />
-          </div>
+            <Field label="Description">
+              <Input
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="What does this node do?"
+              />
+            </Field>
+          </Section>
 
           {!isComposite && (
             <>
-              <div>
-                <Label>Operation</Label>
-                <select
-                  value={operation}
-                  onChange={(e) => setOperation(e.target.value as CustomOperation)}
-                  className={inputCls}
+              {/* ── Logic ────────────────────────────────────────── */}
+              <Section title="Logic">
+                <Field label="Operation" hint={OPERATIONS.find((o) => o.value === operation)?.hint}>
+                  <Select value={operation} onValueChange={(v) => setOperation(v as CustomOperation)}>
+                    <SelectTrigger className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {OPERATIONS.map((op) => (
+                        <SelectItem key={op.value} value={op.value}>{op.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </Field>
+
+                <Field
+                  label={<>Python expression (over <code className="text-cyan-400 font-mono">element</code>)</>}
+                  hint={<>Reference exposed settings with <code className="text-cyan-400 font-mono">{'{{key}}'}</code>.</>}
                 >
-                  {OPERATIONS.map((op) => (
-                    <option key={op.value} value={op.value}>{op.label}</option>
-                  ))}
-                </select>
-                <p className="text-[11px] text-gray-500 mt-1.5">
-                  {OPERATIONS.find((o) => o.value === operation)?.hint}
-                </p>
-              </div>
+                  <Textarea
+                    value={expression}
+                    onChange={(e) => setExpression(e.target.value)}
+                    rows={4}
+                    spellCheck={false}
+                    className="font-mono text-[13px] leading-relaxed resize-y min-h-[92px]"
+                    placeholder="element['price'] * 1.2"
+                  />
+                </Field>
+              </Section>
 
-              <div>
-                <Label>Python expression (over <code className="text-cyan-400 font-mono">element</code>)</Label>
-                <textarea
-                  value={expression}
-                  onChange={(e) => setExpression(e.target.value)}
-                  rows={4}
-                  spellCheck={false}
-                  className={`${inputCls} font-mono text-[13px] leading-relaxed resize-y`}
-                  placeholder="element['price'] * 1.2"
-                />
-                <p className="text-[11px] text-gray-500 mt-1.5">
-                  Reference exposed settings with <code className="text-cyan-400 font-mono">{'{{key}}'}</code>.
-                </p>
-              </div>
-
-              {/* Exposed settings */}
-              <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <Label className="!mb-0">Exposed settings (optional)</Label>
-                  <button
-                    onClick={addSetting}
-                    className="flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300 px-2 py-1 rounded-md hover:bg-white/5"
-                  >
-                    <Plus size={13} /> Add
-                  </button>
-                </div>
+              {/* ── Exposed settings ─────────────────────────────── */}
+              <Section
+                title="Exposed settings"
+                subtitle="optional"
+                action={
+                  <Button variant="ghost" size="xs" onClick={addSetting} className="text-cyan-400 hover:text-cyan-300">
+                    <Plus /> Add
+                  </Button>
+                }
+              >
                 {settings.length === 0 ? (
-                  <p className="text-[11px] text-gray-500">No settings — the expression is fixed.</p>
+                  <p className="text-[11px] text-muted-foreground">No settings — the expression is fixed.</p>
                 ) : (
-                  <div className="space-y-2">
+                  <div className="flex flex-col gap-2.5">
                     {settings.map((s, i) => (
-                      <div key={i} className="flex gap-2 items-center">
-                        <input
+                      <div
+                        key={i}
+                        className="flex flex-wrap sm:flex-nowrap gap-2 items-center bg-muted/40 border border-border rounded-lg p-2"
+                      >
+                        <Input
                           value={s.key}
                           onChange={(e) => updateSetting(i, { key: e.target.value.replace(/\s/g, '') })}
                           placeholder="key"
-                          className={`${inputCls} !w-24 font-mono`}
+                          className="w-full sm:w-28 font-mono"
                         />
-                        <input
+                        <Input
                           value={s.label}
                           onChange={(e) => updateSetting(i, { label: e.target.value })}
                           placeholder="Label"
-                          className={inputCls}
+                          className="flex-1 min-w-[120px]"
                         />
-                        <select
+                        <Select
                           value={s.type}
-                          onChange={(e) => updateSetting(i, { type: e.target.value as CustomSetting['type'] })}
-                          className={`${inputCls} !w-28`}
+                          onValueChange={(v) => updateSetting(i, { type: v as CustomSetting['type'] })}
                         >
-                          <option value="text">text</option>
-                          <option value="number">number</option>
-                          <option value="boolean">boolean</option>
-                        </select>
-                        <button
+                          <SelectTrigger className="w-full sm:w-28">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="text">text</SelectItem>
+                            <SelectItem value="number">number</SelectItem>
+                            <SelectItem value="boolean">boolean</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
                           onClick={() => removeSetting(i)}
-                          className="p-1 rounded text-gray-500 hover:text-red-400 hover:bg-red-500/10"
+                          title="Remove setting"
+                          className="flex-shrink-0 ml-auto text-muted-foreground hover:text-red-400 hover:bg-red-500/10"
                         >
-                          <Trash2 size={13} />
-                        </button>
+                          <Trash2 />
+                        </Button>
                       </div>
                     ))}
                   </div>
                 )}
-              </div>
+              </Section>
 
-              {/* Live preview */}
-              <div>
-                <Label>Generated Beam transform</Label>
-                <pre className="text-[13px] font-mono text-emerald-300 bg-[var(--color-surface-0)] border border-[var(--color-border-hover)] rounded-lg px-3 py-2.5 overflow-x-auto whitespace-pre leading-relaxed">
+              {/* ── Live preview ─────────────────────────────────── */}
+              <Section title="Generated Beam transform">
+                <pre className="text-[13px] font-mono text-emerald-400 bg-muted/40 border border-border rounded-lg px-3.5 py-3 overflow-x-auto whitespace-pre leading-relaxed">
                   {preview}
                 </pre>
-              </div>
+              </Section>
             </>
           )}
 
           {isComposite && (
-            <div className="text-xs text-gray-400 bg-[var(--color-surface-0)] border border-[var(--color-border-hover)] rounded-lg px-3 py-2.5 leading-relaxed">
+            <div className="text-xs text-muted-foreground bg-muted/40 border border-border rounded-lg px-3.5 py-3 leading-relaxed">
               This is a composite node built from {editing?.steps?.length ?? 0} grouped steps.
               You can rename it and change its icon here; its internal logic is fixed.
             </div>
@@ -260,30 +286,64 @@ export function CustomNodeModal({ editing, onClose }: Props) {
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-end gap-2 px-5 py-3.5 border-t border-[var(--color-border)]">
-          <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm text-gray-300 hover:text-gray-100 hover:bg-white/5 transition-colors">
-            Cancel
-          </button>
-          <button
-            onClick={handleSave}
-            disabled={!canSave}
-            className="px-4 py-2 rounded-lg text-sm font-medium bg-indigo-500 text-white hover:bg-indigo-400 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-          >
+        <DialogFooter className="px-5 sm:px-6 py-4">
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button onClick={handleSave} disabled={!canSave}>
             {editing ? 'Save changes' : 'Create node'}
-          </button>
-        </div>
-      </div>
-    </div>,
-    document.body,
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
-const inputCls = `w-full px-3 py-2 text-sm rounded-lg bg-[var(--color-surface-200)]
-  border border-[var(--color-border-hover)] text-gray-100 placeholder-gray-500 outline-none
-  focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/30 transition-colors`;
-
-function Label({ children, className = '' }: { children: React.ReactNode; className?: string }) {
+/**
+ * A titled group of related fields. Separates the modal into clear sections
+ * (Basics / Logic / Settings / Preview) with a header row that can carry an
+ * optional subtitle and a right-aligned action.
+ */
+function Section({
+  title,
+  subtitle,
+  action,
+  children,
+}: {
+  title: string;
+  subtitle?: string;
+  action?: React.ReactNode;
+  children: React.ReactNode;
+}) {
   return (
-    <label className={`block text-xs font-semibold text-gray-300 mb-1.5 ${className}`}>{children}</label>
+    <section className="flex flex-col gap-3">
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          {title}
+          {subtitle && <span className="ml-1.5 normal-case tracking-normal font-normal opacity-70">· {subtitle}</span>}
+        </h3>
+        {action}
+      </div>
+      <div className="flex flex-col gap-4">{children}</div>
+    </section>
+  );
+}
+
+/** A single labelled control with an optional helper hint below it. */
+function Field({
+  label,
+  hint,
+  className = '',
+  children,
+}: {
+  label: React.ReactNode;
+  hint?: React.ReactNode;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className={className}>
+      <Label className="mb-1.5 text-[13px] text-foreground">{label}</Label>
+      {children}
+      {hint && <p className="text-[11px] text-muted-foreground mt-1.5 leading-relaxed">{hint}</p>}
+    </div>
   );
 }

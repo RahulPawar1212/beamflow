@@ -1,5 +1,13 @@
 /**
- * JSON Source node — reads data from a JSON file (one JSON object per line).
+ * JSON Source node (`beamflow:json-source`).
+ *
+ * Reads a JSON / JSON-Lines file (one JSON object per line).
+ *
+ * - Category: Source
+ * - Ports:    out → Records (no inputs)
+ * - Settings: filePath (required), jsonPath (optional extraction path)
+ * - Emits IR: { operation: 'ReadFromJSON', stepType: Read };
+ *             imports `apache_beam.io.ReadFromText`.
  */
 
 import { NodeCategory, IRStepType } from '@beamflow/shared';

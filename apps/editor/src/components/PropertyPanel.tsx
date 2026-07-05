@@ -87,13 +87,13 @@ export function PropertyPanel() {
       )}
 
       {/* Settings form */}
-      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
+      <div className="flex-1 overflow-y-auto px-4 py-3 flex flex-col gap-4">
         {Array.from(groups.entries()).map(([groupName, groupSettings]) => (
           <div key={groupName}>
             <div className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider mb-2">
               {groupName}
             </div>
-            <div className="space-y-3">
+            <div className="flex flex-col gap-3">
               {groupSettings.map((s) => {
                 // Check dependsOn visibility
                 if (s.dependsOn) {

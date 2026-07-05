@@ -10,6 +10,13 @@ import {
 } from 'lucide-react';
 import { useWorkflowStore } from '../store/workflow-store';
 import { api } from '../api/client';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
 
 export function Toolbar() {
   const pipelineName = useWorkflowStore((s) => s.pipelineName);
@@ -196,7 +203,7 @@ export function Toolbar() {
 
   return (
     <>
-      <div className="h-12 glass flex items-center px-4 gap-2 border-b border-[var(--color-border)] z-10">
+      <div className="h-12 glass flex items-center px-5 gap-2 border-b border-[var(--color-border)] z-10">
         {/* Logo */}
         <div className="flex items-center gap-2 mr-3">
           <Zap size={18} className="text-indigo-400" />
@@ -330,14 +337,6 @@ function CodeModal({ onClose }: { onClose: () => void }) {
   const artifact = useWorkflowStore((s) => s.generatedArtifact);
   const [copied, setCopied] = useState(false);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
   if (!artifact) return null;
 
   const handleCopy = async () => {
@@ -361,64 +360,49 @@ function CodeModal({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <div
-      className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-8"
-      onClick={onClose}
-    >
-      <div
-        className="w-full max-w-4xl max-h-[82vh] bg-[var(--color-surface-100)] rounded-xl border border-[var(--color-border)] flex flex-col animate-fade-in shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent
+        showCloseButton
+        className="max-w-4xl sm:max-w-4xl p-0 gap-0 max-h-[82vh] flex flex-col overflow-hidden"
       >
-        <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)]">
-          <div className="flex items-center gap-2 min-w-0">
+        <DialogHeader className="px-4 py-3 border-b border-border pr-14">
+          <DialogTitle className="flex items-center gap-2 min-w-0 text-sm">
             <FileCode2 size={16} className="text-indigo-400 flex-shrink-0" />
-            <span className="text-sm font-semibold text-gray-200 truncate">
+            <span className="truncate">
               {artifact.filename || 'Generated Python Beam Pipeline'}
             </span>
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/5 text-gray-500 uppercase">
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground uppercase font-normal">
               {artifact.language || 'python'}
             </span>
-          </div>
-          <div className="flex items-center gap-1">
-            <button
-              onClick={handleCopy}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs text-gray-400 hover:text-gray-200 hover:bg-white/5 transition-colors"
-            >
-              {copied ? <Check size={13} className="text-emerald-400" /> : <Copy size={13} />}
-              {copied ? 'Copied' : 'Copy'}
-            </button>
-            <button
-              onClick={handleDownload}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs text-gray-400 hover:text-gray-200 hover:bg-white/5 transition-colors"
-            >
-              <Download size={13} />
-              Download
-            </button>
-            <button
-              onClick={onClose}
-              className="p-1.5 rounded-lg text-gray-500 hover:text-gray-300 hover:bg-white/10 transition-colors"
-            >
-              <X size={15} />
-            </button>
-          </div>
-        </div>
+            <span className="flex items-center gap-1 ml-auto">
+              <Button variant="ghost" size="sm" onClick={handleCopy} className="text-muted-foreground">
+                {copied ? <Check className="text-emerald-400" /> : <Copy />}
+                {copied ? 'Copied' : 'Copy'}
+              </Button>
+              <Button variant="ghost" size="sm" onClick={handleDownload} className="text-muted-foreground">
+                <Download />
+                Download
+              </Button>
+            </span>
+          </DialogTitle>
+        </DialogHeader>
 
         <div className="flex-1 overflow-auto p-4">
-          <pre className="text-xs font-mono text-gray-300 whitespace-pre leading-relaxed">
+          <pre className="text-xs font-mono text-foreground/90 whitespace-pre leading-relaxed">
             {artifact.code}
           </pre>
         </div>
 
         {artifact.requirements && artifact.requirements.length > 0 && (
-          <div className="px-4 py-2.5 border-t border-[var(--color-border)]">
-            <div className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider mb-1.5">
+          <div className="px-4 py-2.5 border-t border-border">
+            <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">
               Requirements
             </div>
             <div className="flex flex-wrap gap-1.5">
               {artifact.requirements.map((r) => (
                 <span
                   key={r}
-                  className="text-[11px] font-mono px-2 py-0.5 rounded-md bg-[var(--color-surface-200)] border border-[var(--color-border)] text-gray-400"
+                  className="text-[11px] font-mono px-2 py-0.5 rounded-md bg-muted border border-border text-muted-foreground"
                 >
                   {r}
                 </span>
@@ -426,8 +410,8 @@ function CodeModal({ onClose }: { onClose: () => void }) {
             </div>
           </div>
         )}
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -529,8 +513,8 @@ function ToolbarButton({
 }: ToolbarButtonProps) {
   const colors = accent
     ? variant === 'success'
-      ? 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20'
-      : 'bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500/20'
+      ? 'bg-gradient-to-b from-emerald-500 to-emerald-600 text-white shadow-sm shadow-emerald-500/25 hover:from-emerald-400 hover:to-emerald-500 hover:shadow-md hover:shadow-emerald-500/30 font-medium'
+      : 'bg-gradient-to-b from-indigo-500 to-indigo-600 text-white shadow-sm shadow-indigo-500/25 hover:from-indigo-400 hover:to-indigo-500 hover:shadow-md hover:shadow-indigo-500/30 font-medium'
     : 'text-gray-500 hover:text-gray-300 hover:bg-[var(--color-surface-200)]';
 
   return (
@@ -539,7 +523,7 @@ function ToolbarButton({
       disabled={disabled}
       title={hint ? `${label} (${hint})` : label}
       className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs
-        transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed
+        transition-all duration-150 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100
         ${colors}`}
     >
       <Icon size={14} className={spinning ? 'animate-spin' : ''} />

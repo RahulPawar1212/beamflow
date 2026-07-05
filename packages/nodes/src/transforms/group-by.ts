@@ -1,5 +1,15 @@
 /**
- * GroupBy transform node — groups records by key fields and applies aggregation.
+ * GroupBy transform node (`beamflow:group-by`).
+ *
+ * Groups records by one or more key fields and applies an aggregation.
+ *
+ * - Category: Transform
+ * - Ports:    in → Input, out → Grouped
+ * - Settings: keyFields (required, comma-separated → split to array in IR),
+ *             aggregation (count|sum|avg|min|max), aggregateField
+ *             (required for non-count aggregations)
+ * - Emits IR: { operation: 'GroupBy', stepType: Combine };
+ *             imports `apache_beam.transforms.combiners`.
  */
 
 import { NodeCategory, IRStepType } from '@beamflow/shared';

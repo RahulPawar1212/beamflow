@@ -15,13 +15,14 @@
   "scripts": {
     "build": "tsc",
     "clean": "rimraf dist *.tsbuildinfo",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run",
     "dev": "tsc --watch"
   },
   "dependencies": {
     "@beamflow/shared": "workspace:*"
   },
   "devDependencies": {
+    "@beamflow/core": "workspace:*",
     "@beamflow/tsconfig": "workspace:*",
     "typescript": "^5.8.0",
     "rimraf": "^6.0.0",

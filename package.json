@@ -1,0 +1,21 @@
+{
+  "name": "beamflow",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Visual ETL and ML pipeline builder on Apache Beam",
+  "packageManager": "pnpm@9.15.4",
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "clean": "turbo run clean && rimraf node_modules"
+  },
+  "devDependencies": {
+    "turbo": "^2.5.0",
+    "typescript": "^5.8.0",
+    "rimraf": "^6.0.0",
+    "vitest": "^3.2.0",
+    "@types/node": "^22.15.0"
+  }
+}

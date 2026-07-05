@@ -1,0 +1,30 @@
+{
+  "name": "@beamflow/nodes",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Built-in node definitions for BeamFlow — sources, transforms, and outputs",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "clean": "rimraf dist *.tsbuildinfo",
+    "test": "vitest run --passWithNoTests",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "@beamflow/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@beamflow/tsconfig": "workspace:*",
+    "typescript": "^5.8.0",
+    "rimraf": "^6.0.0",
+    "vitest": "^3.2.0"
+  }
+}

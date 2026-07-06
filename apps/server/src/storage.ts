@@ -13,10 +13,10 @@ import type { SerializedWorkflow } from '@beamflow/shared';
 
 /** Storage interface — implement this for different backends. */
 export interface IStorage {
-  list(): Promise<SerializedWorkflow[]>;
-  get(id: string): Promise<SerializedWorkflow | null>;
-  save(workflow: SerializedWorkflow): Promise<void>;
-  delete(id: string): Promise<boolean>;
+  list(userId?: string): Promise<SerializedWorkflow[]>;
+  get(id: string, userId?: string): Promise<SerializedWorkflow | null>;
+  save(workflow: SerializedWorkflow, userId?: string): Promise<void>;
+  delete(id: string, userId?: string): Promise<boolean>;
 }
 
 /**
@@ -43,7 +43,7 @@ export class LocalJsonStorage implements IStorage {
     return join(this.baseDir, `${safe}.json`);
   }
 
-  async list(): Promise<SerializedWorkflow[]> {
+  async list(_userId?: string): Promise<SerializedWorkflow[]> {
     await this.ensureDir();
     try {
       const files = await readdir(this.baseDir);
@@ -66,7 +66,7 @@ export class LocalJsonStorage implements IStorage {
     }
   }
 
-  async get(id: string): Promise<SerializedWorkflow | null> {
+  async get(id: string, _userId?: string): Promise<SerializedWorkflow | null> {
     await this.ensureDir();
     try {
       const content = await readFile(this.filePath(id), 'utf-8');
@@ -76,13 +76,13 @@ export class LocalJsonStorage implements IStorage {
     }
   }
 
-  async save(workflow: SerializedWorkflow): Promise<void> {
+  async save(workflow: SerializedWorkflow, _userId?: string): Promise<void> {
     await this.ensureDir();
     const content = JSON.stringify(workflow, null, 2);
     await writeFile(this.filePath(workflow.metadata.id), content, 'utf-8');
   }
 
-  async delete(id: string): Promise<boolean> {
+  async delete(id: string, _userId?: string): Promise<boolean> {
     await this.ensureDir();
     try {
       await unlink(this.filePath(id));
@@ -92,3 +92,38 @@ export class LocalJsonStorage implements IStorage {
     }
   }
 }
+
+import { workflowsRepo } from './db/repositories/workflows.repo.js';
+
+/**
+ * LibSQL/PostgreSQL database storage.
+ */
+export class DrizzleStorage implements IStorage {
+  async list(userId?: string): Promise<SerializedWorkflow[]> {
+    if (!userId) return [];
+    return workflowsRepo.list(userId);
+  }
+
+  async get(id: string, userId?: string): Promise<SerializedWorkflow | null> {
+    if (!userId) return null;
+    return workflowsRepo.get(id, userId);
+  }
+
+  async save(workflow: SerializedWorkflow, userId?: string): Promise<void> {
+    if (!userId) {
+      throw new Error('User ID is required to save workflow to database');
+    }
+    const existing = await workflowsRepo.get(workflow.metadata.id, userId);
+    if (existing) {
+      await workflowsRepo.update(workflow, userId);
+    } else {
+      await workflowsRepo.create(workflow, userId);
+    }
+  }
+
+  async delete(id: string, userId?: string): Promise<boolean> {
+    if (!userId) return false;
+    return workflowsRepo.delete(id, userId);
+  }
+}
+

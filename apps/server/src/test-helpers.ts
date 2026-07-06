@@ -13,22 +13,32 @@ import type { IStorage } from './storage.js';
  * absent, delete → boolean, save overwrites by `metadata.id`).
  */
 export class MemoryStorage implements IStorage {
-  private readonly store = new Map<string, SerializedWorkflow>();
+  private readonly store = new Map<string, { workflow: SerializedWorkflow; userId?: string }>();
 
-  async list(): Promise<SerializedWorkflow[]> {
-    return [...this.store.values()];
+  async list(userId?: string): Promise<SerializedWorkflow[]> {
+    return [...this.store.values()]
+      .filter((entry) => !userId || entry.userId === userId)
+      .map((entry) => entry.workflow);
   }
 
-  async get(id: string): Promise<SerializedWorkflow | null> {
-    return this.store.get(id) ?? null;
+  async get(id: string, userId?: string): Promise<SerializedWorkflow | null> {
+    const entry = this.store.get(id);
+    if (!entry) return null;
+    if (userId && entry.userId !== userId) return null;
+    return entry.workflow;
   }
 
-  async save(workflow: SerializedWorkflow): Promise<void> {
-    // Clone so callers can't mutate stored state by reference.
-    this.store.set(workflow.metadata.id, structuredClone(workflow));
+  async save(workflow: SerializedWorkflow, userId?: string): Promise<void> {
+    this.store.set(workflow.metadata.id, {
+      workflow: structuredClone(workflow),
+      userId,
+    });
   }
 
-  async delete(id: string): Promise<boolean> {
+  async delete(id: string, userId?: string): Promise<boolean> {
+    const entry = this.store.get(id);
+    if (!entry) return false;
+    if (userId && entry.userId !== userId) return false;
     return this.store.delete(id);
   }
 }

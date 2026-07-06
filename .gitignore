@@ -38,3 +38,6 @@ coverage/
 *.log
 npm-debug.log*
 pnpm-debug.log*
+
+# Database files
+*.db

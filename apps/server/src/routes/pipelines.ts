@@ -351,8 +351,39 @@ export async function pipelineRoutes(
             } finally {
               client.close();
             }
+          } else if (connectionString.startsWith('mssql://') || connectionString.startsWith('sqlserver://')) {
+            // MSSQL connection
+            const mssql = (await import('mssql')).default;
+            const pool = await mssql.connect(connectionString);
+            try {
+              const res = await pool.request().query(`SELECT TOP 0 * FROM (${sqlQuery}) AS t`);
+              columns = Object.keys(res.recordset.columns).map((colName) => {
+                const colDef = res.recordset.columns[colName];
+                let inferredType = 'string';
+                const typeObj: any = colDef?.type;
+                const typeName = (typeof typeObj === 'function' 
+                  ? typeObj.name 
+                  : (typeObj?.name || typeObj?.constructor?.name || '')).toLowerCase();
+                if (['int', 'bigint', 'smallint', 'tinyint'].includes(typeName)) {
+                  inferredType = 'integer';
+                } else if (['float', 'real', 'decimal', 'numeric', 'money'].includes(typeName)) {
+                  inferredType = 'double';
+                } else if (['bit'].includes(typeName)) {
+                  inferredType = 'boolean';
+                } else if (['date'].includes(typeName)) {
+                  inferredType = 'date';
+                } else if (['datetime', 'datetime2', 'smalldatetime', 'datetimeoffset'].includes(typeName)) {
+                  inferredType = 'datetime';
+                } else if (['time'].includes(typeName)) {
+                  inferredType = 'time';
+                }
+                return { name: colName, type: inferredType };
+              });
+            } finally {
+              await pool.close();
+            }
           } else {
-            throw badRequest('Unsupported database type. Connection string must start with postgres://, postgresql://, or file:');
+            throw badRequest('Unsupported database type. Connection string must start with postgres://, postgresql://, file:, or mssql://');
           }
 
           return reply.send({ columns });
@@ -389,8 +420,16 @@ export async function pipelineRoutes(
             } finally {
               client.close();
             }
+          } else if (connectionString.startsWith('mssql://') || connectionString.startsWith('sqlserver://')) {
+            const mssql = (await import('mssql')).default;
+            const pool = await mssql.connect(connectionString);
+            try {
+              await pool.request().query('SELECT 1');
+            } finally {
+              await pool.close();
+            }
           } else {
-            throw badRequest('Unsupported database connection provider. Connection string must start with postgres://, postgresql://, or file:');
+            throw badRequest('Unsupported database connection provider. Connection string must start with postgres://, postgresql://, file:, or mssql://');
           }
 
           return reply.send({ success: true, message: 'Connection established successfully!' });

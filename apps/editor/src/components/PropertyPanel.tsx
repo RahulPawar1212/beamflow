@@ -506,6 +506,15 @@ function ConnectionBuilderModal({ isOpen, onClose, settings, onSave }: Connectio
   const [provider, setProvider] = React.useState(settings.connectionProvider || 'PostgreSQL');
   const [host, setHost] = React.useState(settings.host || 'localhost');
   const [port, setPort] = React.useState(settings.port || 5432);
+
+  const selectProvider = (p: string) => {
+    setProvider(p);
+    if (p === 'SQLServer' && (port === 5432 || port === 0)) {
+      setPort(1433);
+    } else if (p === 'PostgreSQL' && (port === 1433 || port === 0)) {
+      setPort(5432);
+    }
+  };
   const [databaseName, setDatabaseName] = React.useState(settings.databaseName || '');
   const [authType, setAuthType] = React.useState(settings.username ? 'SQL' : 'Windows');
   const [username, setUsername] = React.useState(settings.username || '');
@@ -524,6 +533,10 @@ function ConnectionBuilderModal({ isOpen, onClose, settings, onSave }: Connectio
   const getConnectionString = () => {
     if (provider === 'SQLite') {
       return `file:${sqlitePath}`;
+    } else if (provider === 'SQLServer') {
+      const authPart = authType === 'SQL' && username ? `${username}:${password}@` : '';
+      const queryParams = authType === 'Windows' ? '?integratedSecurity=true' : '';
+      return `mssql://${authPart}${host}:${port}/${databaseName}${queryParams}`;
     } else {
       const authPart = authType === 'SQL' && username ? `${username}:${password}@` : '';
       return `postgresql://${authPart}${host}:${port}/${databaseName}`;
@@ -596,10 +609,10 @@ function ConnectionBuilderModal({ isOpen, onClose, settings, onSave }: Connectio
             <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-2">
               Select Provider
             </label>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-3 gap-3">
               {/* PostgreSQL Card */}
               <div
-                onClick={() => setProvider('PostgreSQL')}
+                onClick={() => selectProvider('PostgreSQL')}
                 className={`p-3 border rounded-xl cursor-pointer transition-all flex flex-col gap-1.5
                   ${provider === 'PostgreSQL' 
                     ? 'border-indigo-500 bg-indigo-500/5 shadow-md shadow-indigo-500/5' 
@@ -612,12 +625,12 @@ function ConnectionBuilderModal({ isOpen, onClose, settings, onSave }: Connectio
                     {provider === 'PostgreSQL' && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
                   </div>
                 </div>
-                <span className="text-[10px] text-gray-500">Connect to remote or local postgres databases</span>
+                <span className="text-[10px] text-gray-500">Connect to remote/local postgres</span>
               </div>
 
               {/* SQLite Card */}
               <div
-                onClick={() => setProvider('SQLite')}
+                onClick={() => selectProvider('SQLite')}
                 className={`p-3 border rounded-xl cursor-pointer transition-all flex flex-col gap-1.5
                   ${provider === 'SQLite' 
                     ? 'border-indigo-500 bg-indigo-500/5 shadow-md shadow-indigo-500/5' 
@@ -630,7 +643,25 @@ function ConnectionBuilderModal({ isOpen, onClose, settings, onSave }: Connectio
                     {provider === 'SQLite' && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
                   </div>
                 </div>
-                <span className="text-[10px] text-gray-500">Query local file-based database (.db)</span>
+                <span className="text-[10px] text-gray-500">Query local SQLite file</span>
+              </div>
+
+              {/* SQL Server Card */}
+              <div
+                onClick={() => selectProvider('SQLServer')}
+                className={`p-3 border rounded-xl cursor-pointer transition-all flex flex-col gap-1.5
+                  ${provider === 'SQLServer' 
+                    ? 'border-indigo-500 bg-indigo-500/5 shadow-md shadow-indigo-500/5' 
+                    : 'border-[var(--color-border)] bg-[var(--color-surface-200)]/40 hover:border-gray-700'}`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-gray-200">SQL Server</span>
+                  <div className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center
+                    ${provider === 'SQLServer' ? 'border-indigo-500 bg-indigo-500' : 'border-gray-600'}`}>
+                    {provider === 'SQLServer' && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
+                  </div>
+                </div>
+                <span className="text-[10px] text-gray-500">Query Microsoft SQL Server</span>
               </div>
             </div>
           </div>
@@ -654,8 +685,8 @@ function ConnectionBuilderModal({ isOpen, onClose, settings, onSave }: Connectio
             </div>
           )}
 
-          {/* PostgreSQL configuration */}
-          {provider === 'PostgreSQL' && (
+          {/* PostgreSQL & SQL Server configuration */}
+          {(provider === 'PostgreSQL' || provider === 'SQLServer') && (
             <div className="flex flex-col gap-4 animate-fade-in">
               {/* Server Host & Port */}
               <div className="grid grid-cols-3 gap-3">

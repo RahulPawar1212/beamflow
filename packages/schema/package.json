@@ -1,8 +1,8 @@
 {
-  "name": "@beamflow/nodes",
+  "name": "@beamflow/schema",
   "version": "0.1.0",
   "private": true,
-  "description": "Built-in node definitions for BeamFlow — sources, transforms, and outputs",
+  "description": "Design-time schema propagation engine for BeamFlow — computes column-level metadata without executing Apache Beam",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -20,10 +20,9 @@
   },
   "dependencies": {
     "@beamflow/shared": "workspace:*",
-    "@beamflow/schema": "workspace:*"
+    "nanoid": "^5.1.0"
   },
   "devDependencies": {
-    "@beamflow/core": "workspace:*",
     "@beamflow/tsconfig": "workspace:*",
     "typescript": "^5.8.0",
     "rimraf": "^6.0.0",

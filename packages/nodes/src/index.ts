@@ -79,3 +79,7 @@ export {
   requiredError,
 } from './helpers.js';
 export type { DefineNodeOptions } from './helpers.js';
+
+// Schema propagation registry and node exports
+export * from './schema/index.js';
+

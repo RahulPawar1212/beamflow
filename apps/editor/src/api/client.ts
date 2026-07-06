@@ -137,6 +137,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ filePath, delimiter }),
     }),
+  previewSql: (connectionString: string, sqlQuery: string) =>
+    request<{ columns: Array<{ name: string; type: string }> }>('/pipelines/preview-sql', {
+      method: 'POST',
+      body: JSON.stringify({ connectionString, sqlQuery }),
+    }),
 
   // Health
   health: () => request<HealthDTO>('/health'),

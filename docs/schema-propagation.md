@@ -61,7 +61,7 @@ When the visual editor loads or changes:
 
 ## 3. Schema Ingestion & Auto-Detection
 
-To bridge the gap between design-time settings and actual local datasets:
+To bridge the gap between design-time settings and actual local/remote datasets:
 
 ### A. Local CSV Preview Endpoint
 The REST server registers an authenticated preview route in `apps/server/src/routes/pipelines.ts` which uses Node streams to read the first **64KB** of the file to extract preview lines without loading huge files into memory:
@@ -69,15 +69,19 @@ The REST server registers an authenticated preview route in `apps/server/src/rou
 * Body: `{ filePath: string, delimiter: string }`
 * Response: `{ headers: string[], sampleRows: string[][] }`
 
-### B. Client Type Inference Engine
-When the user clicks **`Detect Schema`** on a CSV Source node in the editor properties panel, the editor fetches the preview rows and executes local type-inference:
-1. Loops through headers to evaluate the first non-empty value in each column.
-2. Applies regex matching patterns:
-   - Boolean: `/^(true|false|yes|no|1|0)$/i`
-   - Integer: `/^-?\d+$/`
-   - Double: `/^-?\d+\.\d+$/`
-   - Date: `/^\d{4}-\d{2}-\d{2}$/`
-   - Default fallback: `STRING`
+### B. Database Query Preview Endpoint (SQL Source)
+The REST server exposes a SQL design-time metadata analysis endpoint in `apps/server/src/routes/pipelines.ts` that dynamically queries database column definitions:
+* Route: `POST /api/pipelines/preview-sql`
+* Body: `{ connectionString: string, sqlQuery: string }`
+* Flow:
+  - **PostgreSQL:** Connects using the `postgres` package, executes a dry-run wrapped in `SELECT * FROM (${sqlQuery}) AS t LIMIT 0`, and maps PG OID types (such as `20`, `23`, `701`, etc.) to standard column types (`integer`, `double`, `boolean`, `date`, `datetime`, `time`, or `string`).
+  - **SQLite/LibSQL:** Connects using `@libsql/client`, queries the query using `LIMIT 1`, and dynamically infers runtime column types based on Javascript runtime objects (`number` -> `integer` or `double`, `boolean`, `Date` instance, etc.).
+* Response: `{ columns: Array<{ name: string, type: string }> }`
+
+### C. Client Type Inference Engine
+When the user clicks **`Detect Schema`** on a Source node (CSV Source or SQL Source) in the editor properties panel:
+1. For CSV: The editor fetches the preview rows and executes regex checks (e.g. integer: `/^-?\d+$/`, double: `/^-?\d+\.\d+$/`, date: `/^\d{4}-\d{2}-\d{2}$/`) on column values.
+2. For SQL: The editor requests `/api/pipelines/preview-sql` which executes database column and metadata analysis and returns type maps.
 3. Instantly registers these columns under the `schemaColumns` node setting, which triggers a downstream graph recomputation.
 
 ---

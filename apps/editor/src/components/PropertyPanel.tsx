@@ -126,13 +126,23 @@ export function PropertyPanel() {
           </div>
         ))}
 
-        {/* Custom Schema Editor for CSV Source node */}
+        {/* Custom Schema Editor for CSV and SQL Source nodes */}
         {selectedNode.data.nodeType === 'beamflow:csv-source' && (
           <SchemaEditor
+            nodeType="beamflow:csv-source"
             columns={(settings.schemaColumns as any[]) ?? []}
             onChange={(cols) => handleChange('schemaColumns', cols)}
             filePath={(settings.filePath as string) ?? ''}
             delimiter={(settings.delimiter as string) ?? ','}
+          />
+        )}
+        {selectedNode.data.nodeType === 'beamflow:sql-source' && (
+          <SchemaEditor
+            nodeType="beamflow:sql-source"
+            columns={(settings.schemaColumns as any[]) ?? []}
+            onChange={(cols) => handleChange('schemaColumns', cols)}
+            connectionString={(settings.connectionString as string) ?? ''}
+            sqlQuery={(settings.sqlQuery as string) ?? ''}
           />
         )}
       </div>
@@ -150,48 +160,89 @@ export function PropertyPanel() {
 interface SchemaEditorProps {
   columns: any[];
   onChange: (columns: any[]) => void;
-  filePath: string;
-  delimiter: string;
+  nodeType: string;
+  filePath?: string;
+  delimiter?: string;
+  connectionString?: string;
+  sqlQuery?: string;
 }
 
-function SchemaEditor({ columns, onChange, filePath, delimiter }: SchemaEditorProps) {
+function SchemaEditor({
+  columns,
+  onChange,
+  nodeType,
+  filePath,
+  delimiter,
+  connectionString,
+  sqlQuery,
+}: SchemaEditorProps) {
   const [isDetecting, setIsDetecting] = React.useState(false);
 
   const handleDetect = async () => {
-    if (!filePath) {
-      alert('Please specify a File Path first.');
-      return;
-    }
-    setIsDetecting(true);
-    try {
-      const { headers, sampleRows } = await api.previewCsv(filePath, delimiter);
-      if (headers.length === 0) {
-        alert('No headers or columns detected in this file.');
+    if (nodeType === 'beamflow:csv-source') {
+      if (!filePath) {
+        alert('Please specify a File Path first.');
         return;
       }
-
-      // Simple type inference on first non-empty value in each column
-      const inferred = headers.map((header: string, colIndex: number) => {
-        let inferredType = 'string';
-        for (const row of sampleRows) {
-          const val = row[colIndex]?.trim() ?? '';
-          if (val !== '') {
-            if (/^(true|false|yes|no|1|0)$/i.test(val)) inferredType = 'boolean';
-            else if (/^-?\d+$/.test(val)) inferredType = 'integer';
-            else if (/^-?\d+\.\d+$/.test(val)) inferredType = 'double';
-            else if (/^\d{4}-\d{2}-\d{2}$/.test(val)) inferredType = 'date';
-            break;
-          }
+      setIsDetecting(true);
+      try {
+        const { headers, sampleRows } = await api.previewCsv(filePath, delimiter);
+        if (headers.length === 0) {
+          alert('No headers or columns detected in this file.');
+          return;
         }
-        return { name: header, type: inferredType, nullable: true };
-      });
 
-      onChange(inferred);
-    } catch (err) {
-      console.error('Schema detection error:', err);
-      alert(err instanceof Error ? err.message : 'Failed to read file preview from server.');
-    } finally {
-      setIsDetecting(false);
+        // Simple type inference on first non-empty value in each column
+        const inferred = headers.map((header: string, colIndex: number) => {
+          let inferredType = 'string';
+          for (const row of sampleRows) {
+            const val = row[colIndex]?.trim() ?? '';
+            if (val !== '') {
+              if (/^(true|false|yes|no|1|0)$/i.test(val)) inferredType = 'boolean';
+              else if (/^-?\d+$/.test(val)) inferredType = 'integer';
+              else if (/^-?\d+\.\d+$/.test(val)) inferredType = 'double';
+              else if (/^\d{4}-\d{2}-\d{2}$/.test(val)) inferredType = 'date';
+              break;
+            }
+          }
+          return { name: header, type: inferredType, nullable: true };
+        });
+
+        onChange(inferred);
+      } catch (err) {
+        console.error('Schema detection error:', err);
+        alert(err instanceof Error ? err.message : 'Failed to read file preview from server.');
+      } finally {
+        setIsDetecting(false);
+      }
+    } else if (nodeType === 'beamflow:sql-source') {
+      if (!connectionString) {
+        alert('Please specify a Connection String first.');
+        return;
+      }
+      if (!sqlQuery) {
+        alert('Please specify a SQL Query first.');
+        return;
+      }
+      setIsDetecting(true);
+      try {
+        const { columns: detectedColumns } = await api.previewSql(connectionString, sqlQuery);
+        if (detectedColumns.length === 0) {
+          alert('No columns returned from the SQL query.');
+          return;
+        }
+        const inferred = detectedColumns.map((c) => ({
+          name: c.name,
+          type: c.type,
+          nullable: true,
+        }));
+        onChange(inferred);
+      } catch (err) {
+        console.error('SQL Schema detection error:', err);
+        alert(err instanceof Error ? err.message : 'Failed to query database schema.');
+      } finally {
+        setIsDetecting(false);
+      }
     }
   };
 

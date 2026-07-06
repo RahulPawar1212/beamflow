@@ -14,6 +14,7 @@
 
 import type { SchemaNodeRegistry } from '@beamflow/schema';
 import { CsvSourceSchemaNode } from './csv-source.schema.js';
+import { SqlSourceSchemaNode } from './sql-source.schema.js';
 import { FilterSchemaNode } from './filter.schema.js';
 import { FormulaSchemaNode } from './formula.schema.js';
 import { SelectSchemaNode } from './select.schema.js';
@@ -37,6 +38,10 @@ export function registerBuiltinSchemaNodes(registry: SchemaNodeRegistry): void {
   registry.register(
     'beamflow:csv-source',
     (nodeId, settings) => new CsvSourceSchemaNode(nodeId, settings),
+  );
+  registry.register(
+    'beamflow:sql-source',
+    (nodeId, settings) => new SqlSourceSchemaNode(nodeId, settings),
   );
   registry.register(
     'beamflow:filter',
@@ -76,6 +81,9 @@ export function registerBuiltinSchemaNodes(registry: SchemaNodeRegistry): void {
 // Re-export all schema node classes for direct use
 export { CsvSourceSchemaNode, detectSchemaFromSample, inferColumnType } from './csv-source.schema.js';
 export type { CsvColumnDef } from './csv-source.schema.js';
+
+export { SqlSourceSchemaNode } from './sql-source.schema.js';
+export type { SqlColumnDef } from './sql-source.schema.js';
 
 export { FilterSchemaNode } from './filter.schema.js';
 export { FormulaSchemaNode } from './formula.schema.js';

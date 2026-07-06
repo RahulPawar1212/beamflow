@@ -17,6 +17,7 @@ import type { IPlugin, INodeDefinition } from '@beamflow/shared';
 // Sources
 import { csvSource } from './sources/csv-source.js';
 import { jsonSource } from './sources/json-source.js';
+import { sqlSource } from './sources/sql-source.js';
 
 // Transforms
 import { filter } from './transforms/filter.js';
@@ -38,6 +39,7 @@ export const builtinNodes: INodeDefinition[] = [
   // Sources
   csvSource,
   jsonSource,
+  sqlSource,
   // Transforms
   filter,
   map,

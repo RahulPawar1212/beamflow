@@ -16,11 +16,11 @@ describe('node routes', () => {
   });
 
   describe('GET /api/nodes', () => {
-    it('returns all 6 built-in node definitions', async () => {
+    it('returns all 7 built-in node definitions', async () => {
       const res = await app.inject({ method: 'GET', url: '/api/nodes' });
       expect(res.statusCode).toBe(200);
       const body = res.json();
-      expect(body.nodes).toHaveLength(6);
+      expect(body.nodes).toHaveLength(7);
       const types = body.nodes.map((n: { type: string }) => n.type);
       expect(types).toContain('beamflow:csv-source');
       expect(types).toContain('beamflow:filter');
@@ -79,7 +79,7 @@ describe('node routes', () => {
       expect(res.statusCode).toBe(200);
       const body = res.json();
       expect(body.status).toBe('ok');
-      expect(body.nodeTypes).toBe(6);
+      expect(body.nodeTypes).toBe(7);
     });
   });
 });

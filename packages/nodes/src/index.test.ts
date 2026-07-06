@@ -4,8 +4,8 @@ import { builtinNodes, builtinNodesPlugin } from './index.js';
 
 describe('@beamflow/nodes package', () => {
   describe('builtinNodes array', () => {
-    it('contains the 6 built-in nodes', () => {
-      expect(builtinNodes).toHaveLength(6);
+    it('contains the 7 built-in nodes', () => {
+      expect(builtinNodes).toHaveLength(7);
     });
 
     it('has a unique type for every node', () => {
@@ -38,6 +38,7 @@ describe('@beamflow/nodes package', () => {
       expect(registered.sort()).toEqual(builtinNodes.map((n) => n.type).sort());
       // Spot-check a couple are retrievable.
       expect(registry.get('beamflow:csv-source')).toBeDefined();
+      expect(registry.get('beamflow:sql-source')).toBeDefined();
       expect(registry.get('beamflow:group-by')).toBeDefined();
     });
   });

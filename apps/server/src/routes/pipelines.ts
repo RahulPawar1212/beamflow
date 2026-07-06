@@ -286,5 +286,81 @@ export async function pipelineRoutes(
         }
       },
     );
+
+    /** POST /api/pipelines/preview-sql — Helper to inspect SQL Query columns and types. */
+    appWithAuth.post<{ Body: { connectionString: string; sqlQuery: string } }>(
+      '/api/pipelines/preview-sql',
+      async (req, reply) => {
+        const { connectionString, sqlQuery } = req.body;
+        if (!connectionString) {
+          throw badRequest('connectionString is required.');
+        }
+        if (!sqlQuery) {
+          throw badRequest('sqlQuery is required.');
+        }
+
+        try {
+          let columns: Array<{ name: string; type: string }> = [];
+
+          if (connectionString.startsWith('postgres://') || connectionString.startsWith('postgresql://')) {
+            // Postgres connection
+            const postgres = (await import('postgres')).default;
+            const sql = postgres(connectionString, { max: 1, timeout: 5000 });
+            try {
+              // Wrap in a subquery to run metadata analysis via LIMIT 0
+              const res = await sql.unsafe(`SELECT * FROM (${sqlQuery}) AS t LIMIT 0`);
+              columns = res.columns.map((c: any) => {
+                let inferredType = 'string';
+                const oid = c.type;
+                if ([20, 21, 23, 1560].includes(oid)) inferredType = 'integer';
+                else if ([700, 701, 1700].includes(oid)) inferredType = 'double';
+                else if (oid === 16) inferredType = 'boolean';
+                else if (oid === 1082) inferredType = 'date';
+                else if ([1114, 1184].includes(oid)) inferredType = 'datetime';
+                else if (oid === 1083) inferredType = 'time';
+                return { name: c.name, type: inferredType };
+              });
+            } finally {
+              await sql.end();
+            }
+          } else if (connectionString.startsWith('file:') || connectionString.includes('.db') || connectionString === ':memory:') {
+            // SQLite connection
+            const { createClient } = await import('@libsql/client');
+            const client = createClient({ url: connectionString });
+            try {
+              // Run LIMIT 1 to do type inference on sample values if available, or just get column names
+              const res = await client.execute(`SELECT * FROM (${sqlQuery}) LIMIT 1`);
+              const firstRow = res.rows[0];
+              columns = res.columns.map((colName, index) => {
+                let inferredType = 'string';
+                if (firstRow) {
+                  const val = firstRow[index] ?? (firstRow as any)[colName];
+                  if (typeof val === 'number') {
+                    inferredType = Number.isInteger(val) ? 'integer' : 'double';
+                  } else if (typeof val === 'boolean') {
+                    inferredType = 'boolean';
+                  } else if (val instanceof Date) {
+                    inferredType = 'datetime';
+                  } else if (typeof val === 'string') {
+                    if (/^\d{4}-\d{2}-\d{2}$/.test(val)) inferredType = 'date';
+                    else if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}/.test(val)) inferredType = 'datetime';
+                  }
+                }
+                return { name: colName, type: inferredType };
+              });
+            } finally {
+              client.close();
+            }
+          } else {
+            throw badRequest('Unsupported database type. Connection string must start with postgres://, postgresql://, or file:');
+          }
+
+          return reply.send({ columns });
+        } catch (error) {
+          if (error instanceof ApiError) throw error;
+          throw new ApiError(500, error instanceof Error ? error.message : String(error));
+        }
+      },
+    );
   });
 }

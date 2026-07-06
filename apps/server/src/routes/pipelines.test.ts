@@ -37,15 +37,38 @@ function sourceToSinkWorkflow(id: string): SerializedWorkflow {
 
 describe('pipeline routes', () => {
   let app: FastifyInstance;
+  let token: string;
 
   beforeEach(async () => {
-    ({ app } = await buildApp({ storage: new MemoryStorage() }));
+    ({ app } = await buildApp({
+      storage: new MemoryStorage(),
+    }));
     await app.ready();
+
+    // Create a mock user session with a unique email to avoid 409 collisions
+    const email = `user_${Math.random().toString(36).substring(2, 8)}@example.com`;
+    const userReg = await app.inject({
+      method: 'POST',
+      url: '/api/auth/register',
+      payload: {
+        email,
+        password: 'password123',
+        name: 'John Doe',
+      },
+    });
+    token = userReg.json().token;
   });
 
   afterEach(async () => {
     await app.close();
     vi.clearAllMocks();
+  });
+
+  describe('Authentication protection', () => {
+    it('returns 401 for unauthenticated calls', async () => {
+      const res = await app.inject({ method: 'GET', url: '/api/pipelines' });
+      expect(res.statusCode).toBe(401);
+    });
   });
 
   describe('CRUD lifecycle', () => {
@@ -54,6 +77,7 @@ describe('pipeline routes', () => {
       const created = await app.inject({
         method: 'POST',
         url: '/api/pipelines',
+        headers: { Authorization: `Bearer ${token}` },
         payload: { name: 'My Pipeline' },
       });
       expect(created.statusCode).toBe(201);
@@ -61,13 +85,21 @@ describe('pipeline routes', () => {
       expect(created.json().metadata.name).toBe('My Pipeline');
 
       // Get
-      const got = await app.inject({ method: 'GET', url: `/api/pipelines/${id}` });
+      const got = await app.inject({
+        method: 'GET',
+        url: `/api/pipelines/${id}`,
+        headers: { Authorization: `Bearer ${token}` },
+      });
       expect(got.statusCode).toBe(200);
       const workflow = got.json() as SerializedWorkflow;
       expect(workflow.metadata.id).toBe(id);
 
       // List
-      const list = await app.inject({ method: 'GET', url: '/api/pipelines' });
+      const list = await app.inject({
+        method: 'GET',
+        url: '/api/pipelines',
+        headers: { Authorization: `Bearer ${token}` },
+      });
       expect(list.json().pipelines).toHaveLength(1);
       expect(list.json().pipelines[0]).toMatchObject({ id, nodeCount: 0, connectionCount: 0 });
 
@@ -75,26 +107,46 @@ describe('pipeline routes', () => {
       const updated = await app.inject({
         method: 'PUT',
         url: `/api/pipelines/${id}`,
+        headers: { Authorization: `Bearer ${token}` },
         payload: { ...workflow, metadata: { ...workflow.metadata, name: 'Renamed' } },
       });
       expect(updated.statusCode).toBe(200);
       expect(updated.json().metadata.name).toBe('Renamed');
-      // Server forces the id and refreshes updatedAt.
       expect(updated.json().metadata.id).toBe(id);
 
       // Delete
-      const del = await app.inject({ method: 'DELETE', url: `/api/pipelines/${id}` });
+      const del = await app.inject({
+        method: 'DELETE',
+        url: `/api/pipelines/${id}`,
+        headers: { Authorization: `Bearer ${token}` },
+      });
       expect(del.statusCode).toBe(204);
-      const gone = await app.inject({ method: 'GET', url: `/api/pipelines/${id}` });
+      
+      const gone = await app.inject({
+        method: 'GET',
+        url: `/api/pipelines/${id}`,
+        headers: { Authorization: `Bearer ${token}` },
+      });
       expect(gone.statusCode).toBe(404);
     });
 
     it('returns 404 for get/update/delete of a missing pipeline', async () => {
-      expect((await app.inject({ method: 'GET', url: '/api/pipelines/missing' })).statusCode).toBe(404);
-      expect((await app.inject({ method: 'DELETE', url: '/api/pipelines/missing' })).statusCode).toBe(404);
+      expect((await app.inject({
+        method: 'GET',
+        url: '/api/pipelines/missing',
+        headers: { Authorization: `Bearer ${token}` },
+      })).statusCode).toBe(404);
+
+      expect((await app.inject({
+        method: 'DELETE',
+        url: '/api/pipelines/missing',
+        headers: { Authorization: `Bearer ${token}` },
+      })).statusCode).toBe(404);
+
       const put = await app.inject({
         method: 'PUT',
         url: '/api/pipelines/missing',
+        headers: { Authorization: `Bearer ${token}` },
         payload: sourceToSinkWorkflow('missing'),
       });
       expect(put.statusCode).toBe(404);
@@ -103,13 +155,27 @@ describe('pipeline routes', () => {
 
   describe('POST /api/pipelines/:id/generate', () => {
     it('generates Python Beam code for a valid pipeline', async () => {
-      // Create an empty pipeline, then PUT the concrete source→sink graph.
-      const created = await app.inject({ method: 'POST', url: '/api/pipelines', payload: {} });
+      const created = await app.inject({
+        method: 'POST',
+        url: '/api/pipelines',
+        headers: { Authorization: `Bearer ${token}` },
+        payload: {},
+      });
       const id = created.json().metadata.id;
       const wf = sourceToSinkWorkflow(id);
-      await app.inject({ method: 'PUT', url: `/api/pipelines/${id}`, payload: wf });
+      
+      await app.inject({
+        method: 'PUT',
+        url: `/api/pipelines/${id}`,
+        headers: { Authorization: `Bearer ${token}` },
+        payload: wf,
+      });
 
-      const res = await app.inject({ method: 'POST', url: `/api/pipelines/${id}/generate` });
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/pipelines/${id}/generate`,
+        headers: { Authorization: `Bearer ${token}` },
+      });
       expect(res.statusCode).toBe(200);
       const body = res.json();
       expect(body.language).toBe('python');
@@ -118,34 +184,65 @@ describe('pipeline routes', () => {
     });
 
     it('returns 404 when generating for a missing pipeline', async () => {
-      const res = await app.inject({ method: 'POST', url: '/api/pipelines/missing/generate' });
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/pipelines/missing/generate',
+        headers: { Authorization: `Bearer ${token}` },
+      });
       expect(res.statusCode).toBe(404);
     });
   });
 
   describe('POST /api/pipelines/:id/execute', () => {
     it('executes (mocked) and caches the result for polling', async () => {
-      const created = await app.inject({ method: 'POST', url: '/api/pipelines', payload: {} });
+      const created = await app.inject({
+        method: 'POST',
+        url: '/api/pipelines',
+        headers: { Authorization: `Bearer ${token}` },
+        payload: {},
+      });
       const id = created.json().metadata.id;
       const wf = sourceToSinkWorkflow(id);
-      await app.inject({ method: 'PUT', url: `/api/pipelines/${id}`, payload: wf });
+      
+      await app.inject({
+        method: 'PUT',
+        url: `/api/pipelines/${id}`,
+        headers: { Authorization: `Bearer ${token}` },
+        payload: wf,
+      });
 
-      const exec = await app.inject({ method: 'POST', url: `/api/pipelines/${id}/execute` });
+      const exec = await app.inject({
+        method: 'POST',
+        url: `/api/pipelines/${id}/execute`,
+        headers: { Authorization: `Bearer ${token}` },
+      });
       expect(exec.statusCode).toBe(200);
       const result = exec.json();
       expect(result.status).toBe(ExecutionStatus.Completed);
       expect(result.id).toBe('exec_test');
 
-      // The result is cached and retrievable by exec id.
-      const polled = await app.inject({ method: 'GET', url: `/api/pipelines/${id}/executions/exec_test` });
+      const polled = await app.inject({
+        method: 'GET',
+        url: `/api/pipelines/${id}/executions/exec_test`,
+        headers: { Authorization: `Bearer ${token}` },
+      });
       expect(polled.statusCode).toBe(200);
       expect(polled.json().id).toBe('exec_test');
     });
 
     it('returns 404 for an unknown execution id', async () => {
-      const created = await app.inject({ method: 'POST', url: '/api/pipelines', payload: {} });
+      const created = await app.inject({
+        method: 'POST',
+        url: '/api/pipelines',
+        headers: { Authorization: `Bearer ${token}` },
+        payload: {},
+      });
       const id = created.json().metadata.id;
-      const res = await app.inject({ method: 'GET', url: `/api/pipelines/${id}/executions/nope` });
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/pipelines/${id}/executions/nope`,
+        headers: { Authorization: `Bearer ${token}` },
+      });
       expect(res.statusCode).toBe(404);
     });
   });

@@ -1,19 +1,18 @@
-/**
- * Main App component — assembles toolbar, palette, canvas, and property panel.
- */
-
 import React, { useEffect } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
-import { Toolbar } from './components/Toolbar';
-import { NodePalette } from './components/NodePalette';
-import { Canvas } from './components/Canvas';
-import { PropertyPanel } from './components/PropertyPanel';
-import { Toasts } from './components/Toasts';
-import { GroupBar } from './components/GroupBar';
-import { useWorkflowStore } from './store/workflow-store';
-import { api } from './api/client';
+import { Toolbar } from './components/Toolbar.js';
+import { NodePalette } from './components/NodePalette.js';
+import { Canvas } from './components/Canvas.js';
+import { PropertyPanel } from './components/PropertyPanel.js';
+import { Toasts } from './components/Toasts.js';
+import { GroupBar } from './components/GroupBar.js';
+import { useWorkflowStore } from './store/workflow-store.js';
+import { useAuthStore } from './lib/auth-store.js';
+import { LoginPage } from './components/LoginPage.js';
+import { api } from './api/client.js';
 
 export default function App() {
+  const token = useAuthStore((s) => s.token);
   const setNodeDefinitions = useWorkflowStore((s) => s.setNodeDefinitions);
   const selectedNodeId = useWorkflowStore((s) => s.selectedNodeId);
   const addToast = useWorkflowStore((s) => s.addToast);
@@ -30,8 +29,9 @@ export default function App() {
     loadCustomNodeDefs();
   }, [loadCustomNodeDefs]);
 
-  // Load node definitions from API on mount
+  // Load node definitions from API on mount when token is present
   useEffect(() => {
+    if (!token) return;
     let attempts = 0;
     async function loadNodes() {
       try {
@@ -48,7 +48,11 @@ export default function App() {
       }
     }
     loadNodes();
-  }, [setNodeDefinitions, addToast]);
+  }, [token, setNodeDefinitions, addToast]);
+
+  if (!token) {
+    return <LoginPage />;
+  }
 
   return (
     <ReactFlowProvider>

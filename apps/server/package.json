@@ -22,7 +22,12 @@
     "@beamflow/nodes": "workspace:*",
     "fastify": "^5.3.0",
     "@fastify/cors": "^11.0.0",
-    "nanoid": "^5.1.0"
+    "@fastify/jwt": "^9.0.1",
+    "nanoid": "^5.1.0",
+    "drizzle-orm": "^0.39.1",
+    "@libsql/client": "^0.14.0",
+    "postgres": "^3.4.5",
+    "bcryptjs": "^2.4.3"
   },
   "devDependencies": {
     "@beamflow/tsconfig": "workspace:*",
@@ -30,6 +35,8 @@
     "tsx": "^4.19.0",
     "rimraf": "^6.0.0",
     "vitest": "^3.2.0",
-    "@types/node": "^22.15.0"
+    "@types/node": "^22.15.0",
+    "drizzle-kit": "^0.30.4",
+    "@types/bcryptjs": "^2.4.6"
   }
 }

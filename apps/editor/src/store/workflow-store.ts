@@ -24,6 +24,7 @@ import {
   CUSTOM_NODE_PREFIX,
 } from '../customNodes';
 import { api } from '../api/client';
+import { useSchemaStore } from '../lib/schema-store';
 
 // ─── Types ──────────────────────────────────────────────────────────
 
@@ -221,10 +222,15 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
 
   onConnect: (connection: Connection) => {
     get().pushHistory();
+    const newEdgeId = `edge_${nanoid(8)}`;
     set({
-      edges: addEdge({ ...connection, id: `edge_${nanoid(8)}` }, get().edges),
+      edges: addEdge({ ...connection, id: newEdgeId }, get().edges),
       isDirty: true,
     });
+    // Schema propagation: notify the schema engine of the new edge
+    if (connection.source && connection.target) {
+      useSchemaStore.getState().onEdgeAdded(connection.source, connection.target);
+    }
   },
 
   // ─── Node actions ───────────────────────────────────────────────
@@ -265,14 +271,21 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   updateNodeSettings: (nodeId, settings) => {
     const state = get();
     state.pushHistory();
-    set({
-      nodes: state.nodes.map((n) =>
-        n.id === nodeId
-          ? { ...n, data: { ...n.data, settings: { ...n.data.settings, ...settings } } }
-          : n,
-      ),
-      isDirty: true,
-    });
+    const updatedNodes = state.nodes.map((n) =>
+      n.id === nodeId
+        ? { ...n, data: { ...n.data, settings: { ...n.data.settings, ...settings } } }
+        : n,
+    );
+    set({ nodes: updatedNodes, isDirty: true });
+    // Schema propagation: recompute schema for this node and its descendants
+    const updatedNode = updatedNodes.find((n) => n.id === nodeId);
+    if (updatedNode) {
+      useSchemaStore.getState().onNodeSettingsChanged(
+        nodeId,
+        updatedNode.data.nodeType,
+        { ...updatedNode.data.settings, ...settings },
+      );
+    }
   },
 
   updateNodeLabel: (nodeId, label) => {
@@ -289,12 +302,20 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   removeNode: (nodeId) => {
     const state = get();
     state.pushHistory();
+    // Collect edges that will be removed (for schema cleanup)
+    const removedEdges = state.edges.filter((e) => e.source === nodeId || e.target === nodeId);
     set({
       nodes: state.nodes.filter((n) => n.id !== nodeId),
       edges: state.edges.filter((e) => e.source !== nodeId && e.target !== nodeId),
       selectedNodeId: state.selectedNodeId === nodeId ? null : state.selectedNodeId,
       isDirty: true,
     });
+    // Schema propagation: rebuild after node removal
+    const { nodes, edges } = get();
+    useSchemaStore.getState().syncFromWorkflow(
+      nodes.map((n) => ({ id: n.id, nodeType: n.data.nodeType, settings: n.data.settings })),
+      edges.map((e) => ({ id: e.id, source: e.source, target: e.target })),
+    );
   },
 
   removeSelectedNodes: () => {
@@ -636,6 +657,12 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       historyIndex: -1,
       isDirty: false,
     });
+
+    // Schema propagation: rebuild the schema engine for the loaded workflow
+    useSchemaStore.getState().syncFromWorkflow(
+      nodes.map((n) => ({ id: n.id, nodeType: n.data.nodeType, settings: n.data.settings })),
+      edges.map((e) => ({ id: e.id, source: e.source, target: e.target })),
+    );
   },
 
   clearWorkflow: () => {
@@ -651,5 +678,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       executionStatus: 'idle',
       isDirty: false,
     });
+    // Schema propagation: clear all schema state
+    useSchemaStore.getState().clearSchemas();
   },
 }));

@@ -23,14 +23,28 @@ async function request<T>(
   if (options?.body) {
     headers['Content-Type'] = 'application/json';
   }
+  
+  const token = localStorage.getItem('bf_token');
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
   const res = await fetch(`${API_BASE}${path}`, {
     ...options,
     headers: { ...headers, ...options?.headers },
   });
+
   if (!res.ok) {
+    if (res.status === 401) {
+      localStorage.removeItem('bf_token');
+      localStorage.removeItem('bf_user');
+      // Simple and robust way to force re-render/re-login across the app:
+      window.dispatchEvent(new Event('bf-unauthorized'));
+    }
     const body = await res.json().catch(() => ({}));
     throw new Error((body as Record<string, string>).error || `Request failed: ${res.status}`);
   }
+  
   if (res.status === 204) return undefined as T;
   return res.json();
 }
@@ -48,6 +62,19 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
+  // Auth
+  register: (data: { email?: string; password?: string; name?: string }) =>
+    request<{ token: string; user: { id: string; email: string; name: string } }>('/auth/register', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  login: (data: { email?: string; password?: string }) =>
+    request<{ token: string; user: { id: string; email: string; name: string } }>('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  me: () => request<{ user: { id: string; email: string; name: string } }>('/auth/me'),
+
   // Pipelines
   listPipelines: () => request<{ pipelines: PipelineSummary[] }>('/pipelines'),
   getPipeline: (id: string) => request<SerializedWorkflowDTO>(`/pipelines/${seg(id)}`),
@@ -64,6 +91,40 @@ export const api = {
   deletePipeline: (id: string) =>
     request<void>(`/pipelines/${seg(id)}`, { method: 'DELETE' }),
 
+  // Variables
+  getVariables: (pipelineId: string) =>
+    request<{ variables: Array<{ id: string; name: string; value: string; isSecret: boolean; environment: string }> }>(
+      `/pipelines/${seg(pipelineId)}/variables`
+    ),
+  setVariable: (
+    pipelineId: string,
+    data: { name: string; value: string; environment?: string; isSecret?: boolean }
+  ) =>
+    request<{ status: string }>(`/pipelines/${seg(pipelineId)}/variables`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  deleteVariable: (pipelineId: string, name: string, environment = 'default') =>
+    request<void>(`/pipelines/${seg(pipelineId)}/variables/${seg(name)}?environment=${seg(environment)}`, {
+      method: 'DELETE',
+    }),
+
+  // Versions
+  getVersions: (pipelineId: string) =>
+    request<{ versions: Array<{ id: string; version: number; createdAt: string; label: string | null }> }>(
+      `/pipelines/${seg(pipelineId)}/versions`
+    ),
+  getVersionSnapshot: (pipelineId: string, versionId: string) =>
+    request<{ snapshot: SerializedWorkflowDTO }>(`/pipelines/${seg(pipelineId)}/versions/${seg(versionId)}`),
+  createVersionSnapshot: (pipelineId: string, data: { label?: string }) =>
+    request<{ id: string; version: number; createdAt: string; label: string | null }>(
+      `/pipelines/${seg(pipelineId)}/versions`,
+      {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }
+    ),
+
   // Generation & Execution
   generateCode: (id: string) =>
     request<GeneratedCodeDTO>(`/pipelines/${seg(id)}/generate`, { method: 'POST' }),
@@ -71,6 +132,11 @@ export const api = {
     request<ExecutionResultDTO>(`/pipelines/${seg(id)}/execute`, { method: 'POST' }),
   getExecution: (pipelineId: string, execId: string) =>
     request<ExecutionResultDTO>(`/pipelines/${seg(pipelineId)}/executions/${seg(execId)}`),
+  previewCsv: (filePath: string, delimiter = ',') =>
+    request<{ headers: string[]; sampleRows: string[][] }>('/pipelines/preview-csv', {
+      method: 'POST',
+      body: JSON.stringify({ filePath, delimiter }),
+    }),
 
   // Health
   health: () => request<HealthDTO>('/health'),

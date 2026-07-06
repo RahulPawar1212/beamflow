@@ -6,10 +6,11 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   Save, Play, Code2, Undo2, Redo2, Download, Upload,
   Loader2, Zap, Copy, Check, X, CheckCircle2, XCircle, FileCode2,
-  Sun, Moon, SunDim,
+  Sun, Moon, SunDim, LogOut, User
 } from 'lucide-react';
-import { useWorkflowStore } from '../store/workflow-store';
-import { api } from '../api/client';
+import { useWorkflowStore } from '../store/workflow-store.js';
+import { useAuthStore } from '../lib/auth-store.js';
+import { api } from '../api/client.js';
 import {
   Dialog,
   DialogContent,
@@ -19,6 +20,9 @@ import {
 import { Button } from '@/components/ui/button';
 
 export function Toolbar() {
+  const user = useAuthStore((s) => s.user);
+  const logout = useAuthStore((s) => s.logout);
+  
   const pipelineName = useWorkflowStore((s) => s.pipelineName);
   const pipelineId = useWorkflowStore((s) => s.pipelineId);
   const setPipelineName = useWorkflowStore((s) => s.setPipelineName);
@@ -270,6 +274,28 @@ export function Toolbar() {
             label={theme === 'dark' ? 'Dark' : theme === 'light' ? 'Light' : 'Softer Light'}
             onClick={toggleTheme}
           />
+
+          {/* User profile & Logout */}
+          {user && (
+            <>
+              <div className="w-px h-5 bg-[var(--color-border)] mx-1" />
+              <div className="flex items-center gap-2 pl-1 pr-1.5 py-0.5 rounded-lg border border-[var(--color-border)] bg-black/10">
+                <div className="flex h-6 w-6 items-center justify-center rounded-full bg-indigo-500/25 text-indigo-300">
+                  <User size={12} />
+                </div>
+                <span className="text-xs font-medium text-gray-300 max-w-[100px] truncate">
+                  {user.name}
+                </span>
+                <button
+                  onClick={logout}
+                  title="Sign out"
+                  className="text-gray-500 hover:text-red-400 p-1 rounded-md transition-colors"
+                >
+                  <LogOut size={12} />
+                </button>
+              </div>
+            </>
+          )}
 
           <div className="w-px h-5 bg-[var(--color-border)] mx-1" />
 

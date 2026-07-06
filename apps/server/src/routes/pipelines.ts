@@ -362,5 +362,45 @@ export async function pipelineRoutes(
         }
       },
     );
+
+    /** POST /api/pipelines/test-connection — Verify a database connection string. */
+    appWithAuth.post<{ Body: { connectionString: string } }>(
+      '/api/pipelines/test-connection',
+      async (req, reply) => {
+        const { connectionString } = req.body;
+        if (!connectionString) {
+          throw badRequest('connectionString is required.');
+        }
+
+        try {
+          if (connectionString.startsWith('postgres://') || connectionString.startsWith('postgresql://')) {
+            const postgres = (await import('postgres')).default;
+            const sql = postgres(connectionString, { max: 1, timeout: 3000 });
+            try {
+              await sql`SELECT 1`;
+            } finally {
+              await sql.end();
+            }
+          } else if (connectionString.startsWith('file:') || connectionString.includes('.db') || connectionString === ':memory:') {
+            const { createClient } = await import('@libsql/client');
+            const client = createClient({ url: connectionString });
+            try {
+              await client.execute('SELECT 1');
+            } finally {
+              client.close();
+            }
+          } else {
+            throw badRequest('Unsupported database connection provider. Connection string must start with postgres://, postgresql://, or file:');
+          }
+
+          return reply.send({ success: true, message: 'Connection established successfully!' });
+        } catch (error) {
+          return reply.send({
+            success: false,
+            error: error instanceof Error ? error.message : String(error)
+          });
+        }
+      }
+    );
   });
 }

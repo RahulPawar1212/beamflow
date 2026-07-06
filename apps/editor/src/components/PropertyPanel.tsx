@@ -49,6 +49,8 @@ export function PropertyPanel() {
     groupSettings.sort((a, b) => (a.order || 99) - (b.order || 99));
   }
 
+  const [isConnectionModalOpen, setIsConnectionModalOpen] = React.useState(false);
+
   const handleChange = (key: string, value: unknown) => {
     updateSettings(selectedNode.id, { [key]: value });
   };
@@ -106,6 +108,8 @@ export function PropertyPanel() {
             </div>
             <div className="flex flex-col gap-3">
               {groupSettings.map((s) => {
+                if ((s as any).hidden) return null;
+
                 // Check dependsOn visibility
                 if (s.dependsOn) {
                   const depValue = settings[s.dependsOn.key];
@@ -137,13 +141,23 @@ export function PropertyPanel() {
           />
         )}
         {selectedNode.data.nodeType === 'beamflow:sql-source' && (
-          <SchemaEditor
-            nodeType="beamflow:sql-source"
-            columns={(settings.schemaColumns as any[]) ?? []}
-            onChange={(cols) => handleChange('schemaColumns', cols)}
-            connectionString={(settings.connectionString as string) ?? ''}
-            sqlQuery={(settings.sqlQuery as string) ?? ''}
-          />
+          <>
+            <div className="border-t border-[var(--color-border)] pt-4 mt-2 px-1">
+              <button
+                onClick={() => setIsConnectionModalOpen(true)}
+                className="w-full flex items-center justify-center gap-1 text-xs text-indigo-400 hover:text-indigo-300 font-semibold px-2 py-2 border border-indigo-500/30 rounded-lg hover:bg-indigo-500/10 transition-colors"
+              >
+                🔌 Configure Connection
+              </button>
+            </div>
+            <SchemaEditor
+              nodeType="beamflow:sql-source"
+              columns={(settings.schemaColumns as any[]) ?? []}
+              onChange={(cols) => handleChange('schemaColumns', cols)}
+              connectionString={(settings.connectionString as string) ?? ''}
+              sqlQuery={(settings.sqlQuery as string) ?? ''}
+            />
+          </>
         )}
       </div>
 
@@ -151,6 +165,19 @@ export function PropertyPanel() {
       <div className="px-4 py-2 border-t border-[var(--color-border)] text-[10px] text-gray-700">
         ID: {selectedNode.id}
       </div>
+
+      <ConnectionBuilderModal
+        isOpen={isConnectionModalOpen}
+        onClose={() => setIsConnectionModalOpen(false)}
+        settings={settings}
+        onSave={(connStr, details) => {
+          // Update all details to node settings
+          updateSettings(selectedNode.id, {
+            connectionString: connStr,
+            ...details
+          });
+        }}
+      />
     </div>
   );
 }
@@ -459,6 +486,311 @@ function SettingControl({ setting, value, onChange, inputColumns }: SettingContr
           ))}
         </select>
       )}
+    </div>
+  );
+}
+
+// ─── Connection Builder Modal ───────────────────────────────────────
+
+interface ConnectionBuilderModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  settings: Record<string, any>;
+  onSave: (connectionString: string, details: Record<string, any>) => void;
+}
+
+function ConnectionBuilderModal({ isOpen, onClose, settings, onSave }: ConnectionBuilderModalProps) {
+  if (!isOpen) return null;
+
+  const [provider, setProvider] = React.useState(settings.connectionProvider || 'PostgreSQL');
+  const [host, setHost] = React.useState(settings.host || 'localhost');
+  const [port, setPort] = React.useState(settings.port || 5432);
+  const [databaseName, setDatabaseName] = React.useState(settings.databaseName || '');
+  const [authType, setAuthType] = React.useState(settings.username ? 'SQL' : 'Windows');
+  const [username, setUsername] = React.useState(settings.username || '');
+  const [password, setPassword] = React.useState(settings.password || '');
+  const [sqlitePath, setSqlitePath] = React.useState(settings.sqlitePath || 'beamflow.db');
+  const [containsProduction, setContainsProduction] = React.useState(settings.containsProduction || false);
+  const [rememberConnection, setRememberConnection] = React.useState(settings.rememberConnection !== false);
+
+  const [testStatus, setTestStatus] = React.useState<{ type: 'success' | 'error' | null; message: string }>({
+    type: null,
+    message: '',
+  });
+  const [isTesting, setIsTesting] = React.useState(false);
+
+  // Auto-assemble connection string based on form details
+  const getConnectionString = () => {
+    if (provider === 'SQLite') {
+      return `file:${sqlitePath}`;
+    } else {
+      const authPart = authType === 'SQL' && username ? `${username}:${password}@` : '';
+      return `postgresql://${authPart}${host}:${port}/${databaseName}`;
+    }
+  };
+
+  const handleTest = async () => {
+    setIsTesting(true);
+    setTestStatus({ type: null, message: '' });
+    try {
+      const connStr = getConnectionString();
+      const res = await api.testConnection(connStr);
+      if (res.success) {
+        setTestStatus({ type: 'success', message: 'Connection established successfully!' });
+      } else {
+        setTestStatus({ type: 'error', message: res.error || 'Connection failed.' });
+      }
+    } catch (err) {
+      setTestStatus({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Unknown connection error.',
+      });
+    } finally {
+      setIsTesting(false);
+    }
+  };
+
+  const handleSave = () => {
+    const connStr = getConnectionString();
+    onSave(connStr, {
+      connectionProvider: provider,
+      host,
+      port: Number(port),
+      databaseName,
+      username: authType === 'SQL' ? username : '',
+      password: authType === 'SQL' ? password : '',
+      sqlitePath,
+      containsProduction,
+      rememberConnection,
+    });
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+      <div className="w-full max-w-lg bg-[var(--color-surface-100)] border border-[var(--color-border)] rounded-xl shadow-2xl overflow-hidden animate-zoom-in">
+        {/* Header */}
+        <div className="px-6 py-4 border-b border-[var(--color-border)] flex items-center justify-between bg-[var(--color-surface-200)]">
+          <h3 className="text-sm font-bold text-gray-200 flex items-center gap-2">
+            <span>🔌</span> LINQ to SQL Connection Builder
+          </h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-200 transition-colors">
+            <X size={16} />
+          </button>
+        </div>
+
+        {/* Content */}
+        <div className="p-6 flex flex-col gap-4 max-h-[70vh] overflow-y-auto">
+          {/* Provider Selection */}
+          <div className="border border-[var(--color-border)] p-3 rounded-lg bg-[var(--color-surface-200)]/50">
+            <label className="text-[10px] font-bold text-gray-400 uppercase block mb-2">Provider</label>
+            <div className="flex gap-4">
+              <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
+                <input
+                  type="radio"
+                  name="provider"
+                  checked={provider === 'PostgreSQL'}
+                  onChange={() => setProvider('PostgreSQL')}
+                  className="text-indigo-500 focus:ring-indigo-500/30"
+                />
+                PostgreSQL
+              </label>
+              <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
+                <input
+                  type="radio"
+                  name="provider"
+                  checked={provider === 'SQLite'}
+                  onChange={() => setProvider('SQLite')}
+                  className="text-indigo-500 focus:ring-indigo-500/30"
+                />
+                SQLite (local file)
+              </label>
+              <label className="flex items-center gap-2 text-xs text-gray-500 cursor-not-allowed">
+                <input type="radio" name="provider" disabled className="text-gray-700" />
+                SQL Server (unsupported)
+              </label>
+            </div>
+          </div>
+
+          {/* SQLite Specific details */}
+          {provider === 'SQLite' && (
+            <div className="flex flex-col gap-3">
+              <div>
+                <label className="text-[10px] font-bold text-gray-400 uppercase block mb-1">SQLite Database File Path</label>
+                <input
+                  type="text"
+                  value={sqlitePath}
+                  onChange={(e) => setSqlitePath(e.target.value)}
+                  placeholder="e.g. beamflow.db"
+                  className="w-full px-3 py-2 text-xs rounded-lg bg-[var(--color-surface-200)] border border-[var(--color-border)] text-gray-300 placeholder-gray-600 outline-none focus:border-indigo-500/50 transition-colors"
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Postgres details */}
+          {provider === 'PostgreSQL' && (
+            <div className="flex flex-col gap-4 animate-fade-in">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="col-span-2">
+                  <label className="text-[10px] font-bold text-gray-400 uppercase block mb-1">Server Host</label>
+                  <input
+                    type="text"
+                    value={host}
+                    onChange={(e) => setHost(e.target.value)}
+                    placeholder="localhost"
+                    className="w-full px-3 py-2 text-xs rounded-lg bg-[var(--color-surface-200)] border border-[var(--color-border)] text-gray-300 placeholder-gray-600 outline-none focus:border-indigo-500/50 transition-colors"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-gray-400 uppercase block mb-1">Port</label>
+                  <input
+                    type="number"
+                    value={port}
+                    onChange={(e) => setPort(Number(e.target.value))}
+                    placeholder="5432"
+                    className="w-full px-3 py-2 text-xs rounded-lg bg-[var(--color-surface-200)] border border-[var(--color-border)] text-gray-300 placeholder-gray-600 outline-none focus:border-indigo-500/50 transition-colors"
+                  />
+                </div>
+              </div>
+
+              {/* Logon Details */}
+              <div className="border border-[var(--color-border)] p-3 rounded-lg bg-[var(--color-surface-200)]/30">
+                <label className="text-[10px] font-bold text-gray-400 uppercase block mb-2">Logon Details</label>
+                <div className="flex gap-4 mb-3">
+                  <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="authType"
+                      checked={authType === 'Windows'}
+                      onChange={() => setAuthType('Windows')}
+                      className="text-indigo-500 focus:ring-indigo-500/30"
+                    />
+                    Windows Authentication / Integrated
+                  </label>
+                  <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="authType"
+                      checked={authType === 'SQL'}
+                      onChange={() => setAuthType('SQL')}
+                      className="text-indigo-500 focus:ring-indigo-500/30"
+                    />
+                    SQL Authentication
+                  </label>
+                </div>
+
+                {authType === 'SQL' && (
+                  <div className="flex flex-col gap-2 mt-2 animate-fade-in">
+                    <div>
+                      <label className="text-[9px] font-semibold text-gray-400 block mb-0.5">Username</label>
+                      <input
+                        type="text"
+                        value={username}
+                        onChange={(e) => setUsername(e.target.value)}
+                        placeholder="postgres"
+                        className="w-full px-3 py-1.5 text-xs rounded bg-[var(--color-surface-200)] border border-[var(--color-border)] text-gray-300 placeholder-gray-600 outline-none focus:border-indigo-500/50"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[9px] font-semibold text-gray-400 block mb-0.5">Password</label>
+                      <input
+                        type="password"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        placeholder="••••••••"
+                        className="w-full px-3 py-1.5 text-xs rounded bg-[var(--color-surface-200)] border border-[var(--color-border)] text-gray-300 placeholder-gray-600 outline-none focus:border-indigo-500/50"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Database Select */}
+              <div>
+                <label className="text-[10px] font-bold text-gray-400 uppercase block mb-1">Database Name</label>
+                <input
+                  type="text"
+                  value={databaseName}
+                  onChange={(e) => setDatabaseName(e.target.value)}
+                  placeholder="e.g. sales_db"
+                  className="w-full px-3 py-2 text-xs rounded-lg bg-[var(--color-surface-200)] border border-[var(--color-border)] text-gray-300 placeholder-gray-600 outline-none focus:border-indigo-500/50 transition-colors"
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Options checkboxes */}
+          <div className="flex flex-col gap-2 border-t border-[var(--color-border)] pt-3">
+            <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={rememberConnection}
+                onChange={(e) => setRememberConnection(e.target.checked)}
+                className="rounded text-indigo-500 focus:ring-indigo-500/30"
+              />
+              Remember this connection
+            </label>
+            <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={containsProduction}
+                onChange={(e) => setContainsProduction(e.target.checked)}
+                className="rounded text-indigo-500 focus:ring-indigo-500/30"
+              />
+              Contains production data
+              {containsProduction && (
+                <span className="text-[9px] px-1 py-0.5 rounded bg-red-500/10 text-red-400 font-semibold uppercase animate-pulse">
+                  Production Warning
+                </span>
+              )}
+            </label>
+          </div>
+
+          {/* Status Message */}
+          {testStatus.type && (
+            <div
+              className={`p-3 rounded-lg text-xs font-semibold mt-1 border ${
+                testStatus.type === 'success'
+                  ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                  : 'bg-red-500/10 border-red-500/30 text-red-400'
+              }`}
+            >
+              {testStatus.type === 'success' ? '✅' : '❌'} {testStatus.message}
+            </div>
+          )}
+        </div>
+
+        {/* Footer Actions */}
+        <div className="px-6 py-4 border-t border-[var(--color-border)] bg-[var(--color-surface-200)] flex justify-between gap-3">
+          <button
+            onClick={handleTest}
+            disabled={isTesting}
+            className={`px-4 py-2 rounded-lg text-xs font-bold transition-colors border
+              ${
+                isTesting
+                  ? 'bg-gray-500/10 text-gray-500 border-gray-500/20 cursor-not-allowed'
+                  : 'bg-indigo-500/10 border-indigo-500/30 text-indigo-400 hover:bg-indigo-500/20'
+              }`}
+          >
+            {isTesting ? 'Testing connection...' : 'Test Connection'}
+          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={onClose}
+              className="px-4 py-2 rounded-lg text-xs font-bold text-gray-400 hover:text-gray-200 hover:bg-white/5 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleSave}
+              className="px-4 py-2 rounded-lg text-xs font-bold bg-indigo-500 hover:bg-indigo-400 text-white transition-colors"
+            >
+              Save Connection
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

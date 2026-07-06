@@ -24,7 +24,7 @@ async function request<T>(
     headers['Content-Type'] = 'application/json';
   }
   
-  const token = localStorage.getItem('bf_token');
+  const token = typeof localStorage !== 'undefined' ? localStorage.getItem('bf_token') : null;
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
   }
@@ -36,10 +36,14 @@ async function request<T>(
 
   if (!res.ok) {
     if (res.status === 401) {
-      localStorage.removeItem('bf_token');
-      localStorage.removeItem('bf_user');
+      if (typeof localStorage !== 'undefined') {
+        localStorage.removeItem('bf_token');
+        localStorage.removeItem('bf_user');
+      }
       // Simple and robust way to force re-render/re-login across the app:
-      window.dispatchEvent(new Event('bf-unauthorized'));
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('bf-unauthorized'));
+      }
     }
     const body = await res.json().catch(() => ({}));
     throw new Error((body as Record<string, string>).error || `Request failed: ${res.status}`);
@@ -141,6 +145,11 @@ export const api = {
     request<{ columns: Array<{ name: string; type: string }> }>('/pipelines/preview-sql', {
       method: 'POST',
       body: JSON.stringify({ connectionString, sqlQuery }),
+    }),
+  testConnection: (connectionString: string) =>
+    request<{ success: boolean; message?: string; error?: string }>('/pipelines/test-connection', {
+      method: 'POST',
+      body: JSON.stringify({ connectionString }),
     }),
 
   // Health

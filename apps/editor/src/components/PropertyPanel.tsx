@@ -4,21 +4,32 @@
  */
 
 import React from 'react';
-import { X, Settings2, Trash2 } from 'lucide-react';
-import { useWorkflowStore } from '../store/workflow-store';
-import type { NodeDef } from '../api/client';
+import { X, Settings2, Trash2, Plus } from 'lucide-react';
+import { useWorkflowStore } from '../store/workflow-store.js';
+import { useSchemaStore } from '../lib/schema-store.js';
+import { api } from '../api/client.js';
+import type { NodeDef } from '../api/client.js';
 
 export function PropertyPanel() {
   const selectedNodeId = useWorkflowStore((s) => s.selectedNodeId);
   const nodes = useWorkflowStore((s) => s.nodes);
+  const edges = useWorkflowStore((s) => s.edges);
   const nodeDefinitions = useWorkflowStore((s) => s.nodeDefinitions);
   const updateSettings = useWorkflowStore((s) => s.updateNodeSettings);
   const updateNodeLabel = useWorkflowStore((s) => s.updateNodeLabel);
   const removeNode = useWorkflowStore((s) => s.removeNode);
   const setSelected = useWorkflowStore((s) => s.setSelectedNode);
+  const schemas = useSchemaStore((s) => s.schemas);
 
   const selectedNode = nodes.find((n) => n.id === selectedNodeId);
   if (!selectedNode) return null;
+
+  // Retrieve input columns from parent nodes
+  const incomingEdges = edges.filter((e) => e.target === selectedNode.id);
+  const inputColumns = incomingEdges.flatMap((edge) => {
+    const parentSchema = schemas.get(edge.source)?.outputSchema;
+    return parentSchema ? parentSchema.columns : [];
+  });
 
   const def = nodeDefinitions.find((d) => d.type === selectedNode.data.nodeType);
   if (!def) return null;
@@ -107,12 +118,23 @@ export function PropertyPanel() {
                     setting={s}
                     value={settings[s.key]}
                     onChange={(v) => handleChange(s.key, v)}
+                    inputColumns={inputColumns}
                   />
                 );
               })}
             </div>
           </div>
         ))}
+
+        {/* Custom Schema Editor for CSV Source node */}
+        {selectedNode.data.nodeType === 'beamflow:csv-source' && (
+          <SchemaEditor
+            columns={(settings.schemaColumns as any[]) ?? []}
+            onChange={(cols) => handleChange('schemaColumns', cols)}
+            filePath={(settings.filePath as string) ?? ''}
+            delimiter={(settings.delimiter as string) ?? ','}
+          />
+        )}
       </div>
 
       {/* Node ID footer */}
@@ -123,15 +145,157 @@ export function PropertyPanel() {
   );
 }
 
+// ─── Custom Schema Editor ──────────────────────────────────────────
+
+interface SchemaEditorProps {
+  columns: any[];
+  onChange: (columns: any[]) => void;
+  filePath: string;
+  delimiter: string;
+}
+
+function SchemaEditor({ columns, onChange, filePath, delimiter }: SchemaEditorProps) {
+  const [isDetecting, setIsDetecting] = React.useState(false);
+
+  const handleDetect = async () => {
+    if (!filePath) {
+      alert('Please specify a File Path first.');
+      return;
+    }
+    setIsDetecting(true);
+    try {
+      const { headers, sampleRows } = await api.previewCsv(filePath, delimiter);
+      if (headers.length === 0) {
+        alert('No headers or columns detected in this file.');
+        return;
+      }
+
+      // Simple type inference on first non-empty value in each column
+      const inferred = headers.map((header: string, colIndex: number) => {
+        let inferredType = 'string';
+        for (const row of sampleRows) {
+          const val = row[colIndex]?.trim() ?? '';
+          if (val !== '') {
+            if (/^(true|false|yes|no|1|0)$/i.test(val)) inferredType = 'boolean';
+            else if (/^-?\d+$/.test(val)) inferredType = 'integer';
+            else if (/^-?\d+\.\d+$/.test(val)) inferredType = 'double';
+            else if (/^\d{4}-\d{2}-\d{2}$/.test(val)) inferredType = 'date';
+            break;
+          }
+        }
+        return { name: header, type: inferredType, nullable: true };
+      });
+
+      onChange(inferred);
+    } catch (err) {
+      console.error('Schema detection error:', err);
+      alert(err instanceof Error ? err.message : 'Failed to read file preview from server.');
+    } finally {
+      setIsDetecting(false);
+    }
+  };
+
+  const handleAdd = () => {
+    const newCol = { name: `col_${columns.length + 1}`, type: 'string', nullable: true };
+    onChange([...columns, newCol]);
+  };
+
+  const handleRemove = (index: number) => {
+    const updated = columns.filter((_, i) => i !== index);
+    onChange(updated);
+  };
+
+  const handleFieldChange = (index: number, key: string, val: unknown) => {
+    const updated = columns.map((col, i) => {
+      if (i === index) {
+        return { ...col, [key]: val };
+      }
+      return col;
+    });
+    onChange(updated);
+  };
+
+  return (
+    <div className="border-t border-[var(--color-border)] pt-4 mt-2">
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
+          Schema Columns
+        </span>
+        <div className="flex gap-1.5">
+          <button
+            onClick={handleDetect}
+            disabled={isDetecting}
+            className={`text-[10px] font-semibold px-2 py-1 rounded transition-colors
+              ${isDetecting
+                ? 'text-gray-500 bg-gray-500/10 cursor-not-allowed'
+                : 'text-indigo-400 hover:text-indigo-300 hover:bg-indigo-500/10'}`}
+          >
+            {isDetecting ? 'Detecting...' : 'Detect Schema'}
+          </button>
+          <button
+            onClick={handleAdd}
+            className="flex items-center gap-1 text-[10px] text-emerald-400 hover:text-emerald-300 font-semibold px-2 py-1 rounded hover:bg-emerald-500/10 transition-colors"
+          >
+            <Plus size={12} /> Add
+          </button>
+        </div>
+      </div>
+
+      {columns.length === 0 ? (
+        <div className="text-[10px] text-gray-600 italic py-3 text-center border border-dashed border-[var(--color-border)] rounded-lg">
+          No columns defined. Add columns to propagate downstream.
+        </div>
+      ) : (
+        <div className="flex flex-col gap-2 max-h-60 overflow-y-auto pr-1">
+          {columns.map((col, index) => (
+            <div key={index} className="flex gap-1.5 items-center">
+              <input
+                type="text"
+                value={col.name || ''}
+                onChange={(e) => handleFieldChange(index, 'name', e.target.value)}
+                placeholder="Column name"
+                className="flex-1 min-w-0 px-2 py-1 text-xs rounded-md bg-[var(--color-surface-200)] border border-[var(--color-border)] text-gray-300 outline-none focus:border-indigo-500/50 transition-colors"
+              />
+              <select
+                value={col.type || 'string'}
+                onChange={(e) => handleFieldChange(index, 'type', e.target.value)}
+                className="w-24 px-1.5 py-1 text-xs rounded-md bg-[var(--color-surface-200)] border border-[var(--color-border)] text-gray-300 outline-none focus:border-indigo-500/50 transition-colors"
+              >
+                <option value="string">String</option>
+                <option value="integer">Integer</option>
+                <option value="double">Double</option>
+                <option value="boolean">Boolean</option>
+                <option value="date">Date</option>
+                <option value="datetime">DateTime</option>
+                <option value="time">Time</option>
+                <option value="decimal">Decimal</option>
+                <option value="bytes">Bytes</option>
+              </select>
+              <button
+                onClick={() => handleRemove(index)}
+                className="p-1 rounded hover:bg-red-500/15 text-gray-500 hover:text-red-400 transition-colors"
+                title="Remove column"
+              >
+                <Trash2 size={11} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Setting Control Renderer ───────────────────────────────────────
 
 interface SettingControlProps {
   setting: NodeDef['settings'][0];
   value: unknown;
   onChange: (value: unknown) => void;
+  inputColumns: any[];
 }
 
-function SettingControl({ setting, value, onChange }: SettingControlProps) {
+function SettingControl({ setting, value, onChange, inputColumns }: SettingControlProps) {
   const isFixed = setting.fixed;
 
   const baseInputClass = `w-full px-2.5 py-1.5 text-xs rounded-lg
@@ -139,6 +303,8 @@ function SettingControl({ setting, value, onChange }: SettingControlProps) {
     text-gray-300 placeholder-gray-600 outline-none
     focus:border-indigo-500/50 transition-colors
     ${isFixed ? 'opacity-60 cursor-not-allowed' : ''}`;
+
+  const isColumnDropdown = (setting.key === 'field' || setting.key === 'aggregateField') && inputColumns.length > 0;
 
   return (
     <div>
@@ -160,14 +326,30 @@ function SettingControl({ setting, value, onChange }: SettingControlProps) {
 
       {/* Text / Expression */}
       {(setting.type === 'text' || setting.type === 'expression') && (
-        <input
-          type="text"
-          value={(value as string) || ''}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder={setting.placeholder}
-          disabled={isFixed}
-          className={baseInputClass}
-        />
+        isColumnDropdown ? (
+          <select
+            value={(value as string) || ''}
+            onChange={(e) => onChange(e.target.value)}
+            disabled={isFixed}
+            className={baseInputClass}
+          >
+            <option value="">-- Select Column --</option>
+            {inputColumns.map((col) => (
+              <option key={col.id || col.name} value={col.name}>
+                {col.name} ({col.type})
+              </option>
+            ))}
+          </select>
+        ) : (
+          <input
+            type="text"
+            value={(value as string) || ''}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder={setting.placeholder}
+            disabled={isFixed}
+            className={baseInputClass}
+          />
+        )
       )}
 
       {/* Textarea / SQL */}

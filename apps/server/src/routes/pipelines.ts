@@ -376,10 +376,10 @@ export async function pipelineRoutes(
             let mssql;
             if (isWindowsAuth) {
               mssql = (await import('mssql/msnodesqlv8')).default;
-              config.driver = 'msnodesqlv8';
-              config.options.trustedConnection = true;
-              delete config.user;
-              delete config.password;
+              const serverName = url.hostname;
+              const portName = url.port ? `,${url.port}` : '';
+              const dbName = url.pathname.replace(/^\//, '');
+              config.connectionString = `Driver={ODBC Driver 18 for SQL Server};Server=${serverName}${portName};Database=${dbName};Trusted_Connection=yes;Encrypt=no;TrustServerCertificate=yes;`;
             } else {
               mssql = (await import('mssql')).default;
             }
@@ -474,10 +474,10 @@ export async function pipelineRoutes(
             let mssql;
             if (isWindowsAuth) {
               mssql = (await import('mssql/msnodesqlv8')).default;
-              config.driver = 'msnodesqlv8';
-              config.options.trustedConnection = true;
-              delete config.user;
-              delete config.password;
+              const serverName = url.hostname;
+              const portName = url.port ? `,${url.port}` : '';
+              const dbName = url.pathname.replace(/^\//, '');
+              config.connectionString = `Driver={ODBC Driver 18 for SQL Server};Server=${serverName}${portName};Database=${dbName};Trusted_Connection=yes;Encrypt=no;TrustServerCertificate=yes;`;
             } else {
               mssql = (await import('mssql')).default;
             }

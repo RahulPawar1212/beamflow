@@ -353,8 +353,38 @@ export async function pipelineRoutes(
             }
           } else if (connectionString.startsWith('mssql://') || connectionString.startsWith('sqlserver://')) {
             // MSSQL connection
-            const mssql = (await import('mssql')).default;
-            const pool = await mssql.connect(connectionString);
+            const url = new URL(connectionString.replace(/^sqlserver:\/\//i, 'mssql://'));
+            const isWindowsAuth = url.searchParams.get('integratedSecurity') === 'true';
+
+            const config: any = {
+              server: url.hostname,
+              port: url.port ? parseInt(url.port, 10) : 1433,
+              database: url.pathname.replace(/^\//, ''),
+              options: {
+                encrypt: false,
+                trustServerCertificate: true
+              }
+            };
+
+            if (url.username) {
+              config.user = decodeURIComponent(url.username);
+            }
+            if (url.password) {
+              config.password = decodeURIComponent(url.password);
+            }
+
+            let mssql;
+            if (isWindowsAuth) {
+              mssql = (await import('mssql/msnodesqlv8')).default;
+              config.driver = 'msnodesqlv8';
+              config.options.trustedConnection = true;
+              delete config.user;
+              delete config.password;
+            } else {
+              mssql = (await import('mssql')).default;
+            }
+
+            const pool = await mssql.connect(config);
             try {
               const res = await pool.request().query(`SELECT TOP 0 * FROM (${sqlQuery}) AS t`);
               columns = Object.keys(res.recordset.columns).map((colName) => {
@@ -421,8 +451,38 @@ export async function pipelineRoutes(
               client.close();
             }
           } else if (connectionString.startsWith('mssql://') || connectionString.startsWith('sqlserver://')) {
-            const mssql = (await import('mssql')).default;
-            const pool = await mssql.connect(connectionString);
+            const url = new URL(connectionString.replace(/^sqlserver:\/\//i, 'mssql://'));
+            const isWindowsAuth = url.searchParams.get('integratedSecurity') === 'true';
+
+            const config: any = {
+              server: url.hostname,
+              port: url.port ? parseInt(url.port, 10) : 1433,
+              database: url.pathname.replace(/^\//, ''),
+              options: {
+                encrypt: false,
+                trustServerCertificate: true
+              }
+            };
+
+            if (url.username) {
+              config.user = decodeURIComponent(url.username);
+            }
+            if (url.password) {
+              config.password = decodeURIComponent(url.password);
+            }
+
+            let mssql;
+            if (isWindowsAuth) {
+              mssql = (await import('mssql/msnodesqlv8')).default;
+              config.driver = 'msnodesqlv8';
+              config.options.trustedConnection = true;
+              delete config.user;
+              delete config.password;
+            } else {
+              mssql = (await import('mssql')).default;
+            }
+
+            const pool = await mssql.connect(config);
             try {
               await pool.request().query('SELECT 1');
             } finally {

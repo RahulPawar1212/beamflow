@@ -10,6 +10,7 @@ export const sqliteUsers = sqliteTable('users', {
   email: text('email').unique().notNull(),
   passwordHash: text('password_hash').notNull(),
   name: text('name').notNull().default(''),
+  geminiApiKey: text('gemini_api_key'),
   createdAt: text('created_at').notNull(),
 });
 
@@ -56,6 +57,7 @@ export const pgUsers = pgTable('users', {
   email: pgText('email').unique().notNull(),
   passwordHash: pgText('password_hash').notNull(),
   name: pgText('name').notNull().default(''),
+  geminiApiKey: pgText('gemini_api_key'),
   createdAt: pgText('created_at').notNull(),
 });
 

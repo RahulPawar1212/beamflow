@@ -4,12 +4,14 @@ import { Toolbar } from './components/Toolbar.js';
 import { NodePalette } from './components/NodePalette.js';
 import { Canvas } from './components/Canvas.js';
 import { PropertyPanel } from './components/PropertyPanel.js';
+import { AIPanel } from './components/AIPanel.js';
 import { Toasts } from './components/Toasts.js';
 import { GroupBar } from './components/GroupBar.js';
 import { PreviewPanel } from './components/PreviewPanel.js';
 import { useWorkflowStore } from './store/workflow-store.js';
 import { useAuthStore } from './lib/auth-store.js';
 import { LoginPage } from './components/LoginPage.js';
+import { SettingsModal } from './components/SettingsModal.js';
 import { api } from './api/client.js';
 
 export default function App() {
@@ -19,6 +21,9 @@ export default function App() {
   const addToast = useWorkflowStore((s) => s.addToast);
   const initTheme = useWorkflowStore((s) => s.initTheme);
   const loadCustomNodeDefs = useWorkflowStore((s) => s.loadCustomNodeDefs);
+  const isAIPanelOpen = useWorkflowStore((s) => s.isAIPanelOpen);
+  const isSettingsModalOpen = useWorkflowStore((s) => s.isSettingsModalOpen);
+  const setSettingsModalOpen = useWorkflowStore((s) => s.setSettingsModalOpen);
 
   // Initialize theme on mount
   useEffect(() => {
@@ -66,6 +71,19 @@ export default function App() {
           {/* Left: Node palette */}
           <NodePalette />
 
+          <AIPanel />
+
+          {/* Expand AI Panel button (visible when panel is hidden) */}
+          {!isAIPanelOpen && (
+            <button
+              onClick={() => useWorkflowStore.getState().openAIPanel()}
+              className="absolute left-[272px] top-1/2 -translate-y-1/2 z-20 flex items-center justify-center w-6 h-16 bg-[var(--color-surface-100)] rounded-r-lg shadow-md border border-l-0 border-[var(--color-border)] hover:bg-[var(--color-surface-200)] transition-colors group cursor-pointer"
+              title="Open AI Flow Maker"
+            >
+              <div className="w-1 h-8 rounded-full bg-indigo-500/50 group-hover:bg-indigo-400 transition-colors" />
+            </button>
+          )}
+
           {/* Center: Canvas */}
           <div className="flex-1 relative flex">
             <Canvas />
@@ -79,6 +97,11 @@ export default function App() {
 
         {/* Transient notifications */}
         <Toasts />
+        
+        <SettingsModal 
+          isOpen={isSettingsModalOpen} 
+          onClose={() => setSettingsModalOpen(false)} 
+        />
       </div>
     </ReactFlowProvider>
   );

@@ -1,0 +1,1 @@
+ALTER TABLE `users` ADD `gemini_api_key` text;

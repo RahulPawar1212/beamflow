@@ -8,6 +8,13 @@
       "when": 1783358539302,
       "tag": "0000_overjoyed_human_robot",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1783446863826,
+      "tag": "0001_small_manta",
+      "breakpoints": true
     }
   ]
 }

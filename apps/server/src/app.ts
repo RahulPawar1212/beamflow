@@ -18,6 +18,7 @@ import { pipelineRoutes } from './routes/pipelines.js';
 import { authRoutes } from './routes/auth.js';
 import { variableRoutes } from './routes/variables.js';
 import { versionRoutes } from './routes/versions.js';
+import { userRoutes } from './routes/users.js';
 import { DrizzleStorage, type IStorage } from './storage.js';
 import { registerErrorHandler } from './errors.js';
 import { runMigrations } from './db/migrate.js';
@@ -104,10 +105,14 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<{
 
   // Wire Routes
   await authRoutes(app);
+  await userRoutes(app);
   await variableRoutes(app);
   await versionRoutes(app);
   await nodeRoutes(app, registry);
   await pipelineRoutes(app, storage, registry);
+  
+  const { aiRoutes } = await import('./routes/ai.js');
+  await aiRoutes(app, registry);
 
   app.get('/api/health', async () => ({
     status: 'ok',

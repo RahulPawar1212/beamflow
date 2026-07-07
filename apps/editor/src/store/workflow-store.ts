@@ -141,6 +141,15 @@ interface WorkflowState {
   openPreviewPanel: (nodeId: string) => void;
   closePreviewPanel: () => void;
 
+  // AI Panel State
+  isAIPanelOpen: boolean;
+  openAIPanel: () => void;
+  closeAIPanel: () => void;
+
+  // Settings Modal State
+  isSettingsModalOpen: boolean;
+  setSettingsModalOpen: (isOpen: boolean) => void;
+
   // Undo/redo
   undo: () => void;
   redo: () => void;
@@ -186,6 +195,10 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   isPreviewPanelOpen: false,
   previewNodeId: null,
   previewRefreshKey: 0,
+  
+  isAIPanelOpen: false,
+  isSettingsModalOpen: false,
+  setSettingsModalOpen: (isOpen) => set({ isSettingsModalOpen: isOpen }),
 
   // ─── Theme Actions ──────────────────────────────────────────────
 
@@ -259,6 +272,9 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     previewRefreshKey: state.previewRefreshKey + 1 
   })),
   closePreviewPanel: () => set({ isPreviewPanelOpen: false }),
+
+  openAIPanel: () => set({ isAIPanelOpen: true }),
+  closeAIPanel: () => set({ isAIPanelOpen: false }),
 
   setSelectedNode: (id) => set({ selectedNodeId: id }),
 

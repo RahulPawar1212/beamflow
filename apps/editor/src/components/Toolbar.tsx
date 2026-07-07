@@ -6,7 +6,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   Save, Play, Code2, Undo2, Redo2, Download, Upload,
   Loader2, Zap, Copy, Check, X, CheckCircle2, XCircle, FileCode2,
-  Sun, Moon, SunDim, LogOut, User, FolderOpen, Plus, Trash2, Clock
+  Sun, Moon, SunDim, LogOut, User, FolderOpen, Plus, Trash2, Clock, Settings
 } from 'lucide-react';
 import { useWorkflowStore } from '../store/workflow-store.js';
 import { useAuthStore } from '../lib/auth-store.js';
@@ -302,6 +302,13 @@ export function Toolbar() {
                 <span className="text-xs font-medium text-gray-300 max-w-[100px] truncate">
                   {user.name}
                 </span>
+                <button
+                  onClick={() => useWorkflowStore.getState().setSettingsModalOpen(true)}
+                  title="Settings"
+                  className="text-gray-500 hover:text-indigo-400 p-1 rounded-md transition-colors"
+                >
+                  <Settings size={12} />
+                </button>
                 <button
                   onClick={logout}
                   title="Sign out"

@@ -65,6 +65,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+  generateFlow: (prompt: string) =>
+    request<{ nodes: any[]; edges: any[] }>('/ai/generate', {
+      method: 'POST',
+      body: JSON.stringify({ prompt }),
+    }),
 
   // Auth
   register: (data: { email?: string; password?: string; name?: string }) =>
@@ -78,6 +83,12 @@ export const api = {
       body: JSON.stringify(data),
     }),
   me: () => request<{ user: { id: string; email: string; name: string } }>('/auth/me'),
+  getProfile: () => request<{ id: string; email: string; name: string; geminiApiKey: string | null; createdAt: string }>('/users/me'),
+  updateProfile: (data: { name?: string; geminiApiKey?: string }) =>
+    request<{ success: boolean }>('/users/me', {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
 
   // Pipelines
   listPipelines: () => request<{ pipelines: PipelineSummary[] }>('/pipelines'),

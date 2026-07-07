@@ -10,9 +10,9 @@ import type { NodeRegistry } from '@beamflow/core';
 import { DAG, deserializeWorkflow, serializeWorkflow } from '@beamflow/graph';
 import { buildIR, optimizeIR, validateIR } from '@beamflow/ir';
 import { generatePythonBeam } from '@beamflow/beam-generator';
-import { executePipeline } from '@beamflow/execution';
+import { executePipeline, LocalFeatherStorage, PreviewCacheManager, PreviewManager } from '@beamflow/execution';
 import { generateId, timestamp, SCHEMA_VERSION } from '@beamflow/shared';
-import type { SerializedWorkflow } from '@beamflow/shared';
+import type { SerializedWorkflow, PreviewRowsResponse } from '@beamflow/shared';
 import type { IStorage } from '../storage.js';
 import { notFound, badRequest, ApiError } from '../errors.js';
 
@@ -107,6 +107,10 @@ export async function pipelineRoutes(
   storage: IStorage,
   registry: NodeRegistry,
  ): Promise<void> {
+  const previewStorage = new LocalFeatherStorage();
+  const previewCache = new PreviewCacheManager(previewStorage);
+  const previewManager = new PreviewManager(previewCache, previewStorage, registry);
+
   // Wrap in a plugin instance that enforces authentication and encapsulates hooks
   app.register(async (appWithAuth) => {
     appWithAuth.addHook('preHandler', app.authenticate);
@@ -179,6 +183,13 @@ export async function pipelineRoutes(
         }
 
         const workflow = req.body as SerializedWorkflow;
+        
+        // Invalidate downstream previews for any nodes that changed
+        // In a real implementation we would diff the DAG, but for now we'll
+        // assume the UI tells us which node changed, or we invalidate everything if unsure.
+        // For MVP, since we just save the whole workflow, we can invalidate all nodes' previews
+        // just to be safe, or leave it to the UI to explicitly trigger a refresh.
+
         // Ensure ID consistency
         const toSave: SerializedWorkflow = {
           ...workflow,
@@ -203,8 +214,51 @@ export async function pipelineRoutes(
         if (!deleted) {
           throw notFound('Pipeline not found or unauthorized.');
         }
+        await previewStorage.deleteAll(req.params.id);
         return reply.status(204).send();
       },
+    );
+
+    // ─── Preview Engine ────────────────────────────────────────────────
+
+    /** POST /api/pipelines/:id/nodes/:nodeId/preview — Trigger a preview generation */
+    appWithAuth.post<{ Params: { id: string; nodeId: string } }>(
+      '/api/pipelines/:id/nodes/:nodeId/preview',
+      async (req, reply) => {
+        const userId = (req.user as any).id;
+        const workflow = await storage.get(req.params.id, userId);
+        if (!workflow) {
+          throw notFound('Pipeline not found or unauthorized.');
+        }
+
+        // Fire and forget — run in background
+        previewManager.triggerPreview(workflow, req.params.nodeId, 1000).catch(console.error);
+
+        return reply.status(202).send({ message: 'Preview generation started.' });
+      }
+    );
+
+    /** GET /api/pipelines/:id/nodes/:nodeId/preview — Retrieve paginated preview data */
+    appWithAuth.get<{ Params: { id: string; nodeId: string }, Querystring: { page?: string, pageSize?: string } }>(
+      '/api/pipelines/:id/nodes/:nodeId/preview',
+      async (req, reply) => {
+        const userId = (req.user as any).id;
+        // Basic auth check
+        const workflow = await storage.get(req.params.id, userId);
+        if (!workflow) {
+          throw notFound('Pipeline not found or unauthorized.');
+        }
+
+        const page = parseInt(req.query.page || '1', 10);
+        const pageSize = parseInt(req.query.pageSize || '100', 10);
+
+        const response = await previewCache.getPreviewPage(req.params.id, req.params.nodeId, page, pageSize);
+        if (!response) {
+          throw notFound('No preview available for this node.');
+        }
+
+        return reply.send(response);
+      }
     );
 
     // ─── Code Generation ──────────────────────────────────────────────

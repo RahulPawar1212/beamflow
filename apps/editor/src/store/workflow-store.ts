@@ -91,6 +91,10 @@ interface WorkflowState {
   toasts: Toast[];
   theme: 'dark' | 'light' | 'mid';
 
+  // Preview Panel State
+  isPreviewPanelOpen: boolean;
+  previewNodeId: string | null;
+
   // Actions
   toggleTheme: () => void;
   initTheme: () => void;
@@ -130,6 +134,10 @@ interface WorkflowState {
   /** How many nodes are currently selected (for enabling the group action). */
   selectedCount: () => number;
 
+  // Preview Panel Actions
+  openPreviewPanel: (nodeId: string) => void;
+  closePreviewPanel: () => void;
+
   // Undo/redo
   undo: () => void;
   redo: () => void;
@@ -167,7 +175,10 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   lastSavedAt: null,
   isDirty: false,
   toasts: [],
-  theme: 'dark',
+  theme: 'mid',
+
+  isPreviewPanelOpen: false,
+  previewNodeId: null,
 
   // ─── Theme Actions ──────────────────────────────────────────────
 
@@ -234,6 +245,9 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   },
 
   // ─── Node actions ───────────────────────────────────────────────
+
+  openPreviewPanel: (nodeId) => set({ isPreviewPanelOpen: true, previewNodeId: nodeId }),
+  closePreviewPanel: () => set({ isPreviewPanelOpen: false }),
 
   setSelectedNode: (id) => set({ selectedNodeId: id }),
 

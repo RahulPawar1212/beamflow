@@ -4,17 +4,33 @@ import { ExecutionStatus } from '@beamflow/shared';
 import type { SerializedWorkflow } from '@beamflow/shared';
 
 // Mock the execution engine so /execute needs no Python runtime.
-vi.mock('@beamflow/execution', () => ({
-  executePipeline: vi.fn(async () => ({
-    id: 'exec_test',
-    status: ExecutionStatus.Completed,
-    startedAt: '2024-01-01T00:00:00.000Z',
-    completedAt: '2024-01-01T00:00:01.000Z',
-    logs: ['[BeamFlow] done'],
-    errors: [],
-    exitCode: 0,
-  })),
-}));
+vi.mock('@beamflow/execution', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@beamflow/execution')>();
+  return {
+    ...actual,
+    executePipeline: vi.fn(async () => ({
+      id: 'exec_test',
+      status: ExecutionStatus.Completed,
+      startedAt: '2024-01-01T00:00:00.000Z',
+      completedAt: '2024-01-01T00:00:01.000Z',
+      logs: ['[BeamFlow] done'],
+      errors: [],
+      exitCode: 0,
+    })),
+    // Dummy implementations for tests to avoid filesystem side-effects
+    LocalFeatherStorage: class LocalFeatherStorage {
+      getFeatherFilePath() { return 'dummy.feather'; }
+      async deleteAll() {}
+    },
+    PreviewCacheManager: class PreviewCacheManager {
+      async updateMetadata() {}
+      async getPreviewPage() { return { data: [], totalRows: 0, page: 1, pageSize: 100, status: 'ready' }; }
+    },
+    PreviewManager: class PreviewManager {
+      async triggerPreview() {}
+    }
+  };
+});
 
 import { buildApp } from '../app.js';
 import { MemoryStorage } from '../test-helpers.js';

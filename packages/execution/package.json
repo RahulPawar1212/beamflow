@@ -20,12 +20,13 @@
   },
   "dependencies": {
     "@beamflow/shared": "workspace:*",
+    "apache-arrow": "^21.1.0",
     "nanoid": "^5.1.0"
   },
   "devDependencies": {
     "@beamflow/tsconfig": "workspace:*",
-    "typescript": "^5.8.0",
     "rimraf": "^6.0.0",
+    "typescript": "^5.8.0",
     "vitest": "^3.2.0"
   }
 }

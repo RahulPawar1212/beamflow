@@ -1,12 +1,12 @@
 /**
  * API client for the BeamFlow backend.
  *
- * Response types are derived from `@beamflow/shared` (the same domain types the
  * server uses) rather than hand-written duplicates, so client/server drift is
  * caught by the compiler. The `api` object's method names/signatures are stable
  * — call sites import the type aliases exported at the bottom of this file.
  */
 
+import type { PreviewRowsResponse } from '@beamflow/shared';
 
 /**
  * Base URL for API calls. Defaults to the relative `/api` (proxied to the
@@ -100,6 +100,24 @@ export const api = {
     request<{ variables: Array<{ id: string; name: string; value: string; isSecret: boolean; environment: string }> }>(
       `/pipelines/${seg(pipelineId)}/variables`
     ),
+  saveVariables: (pipelineId: string, variables: Array<{ id: string; name: string; value: string; isSecret: boolean; environment: string }>) =>
+    request<void>(`/pipelines/${seg(pipelineId)}/variables`, {
+      method: 'PUT',
+      body: JSON.stringify({ variables }),
+    }),
+
+  // Preview
+  triggerPreview: (pipelineId: string, nodeId: string) =>
+    request<{ message: string }>(`/pipelines/${seg(pipelineId)}/nodes/${seg(nodeId)}/preview`, {
+      method: 'POST',
+    }),
+  getPreview: (pipelineId: string, nodeId: string, page?: number, pageSize?: number) => {
+    const params = new URLSearchParams();
+    if (page) params.set('page', page.toString());
+    if (pageSize) params.set('pageSize', pageSize.toString());
+    const query = params.toString() ? `?${params.toString()}` : '';
+    return request<PreviewRowsResponse>(`/pipelines/${seg(pipelineId)}/nodes/${seg(nodeId)}/preview${query}`);
+  },
   setVariable: (
     pipelineId: string,
     data: { name: string; value: string; environment?: string; isSecret?: boolean }

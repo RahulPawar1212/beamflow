@@ -91,6 +91,16 @@ export function PropertyPanel() {
             border border-transparent rounded-md px-1.5 py-0.5 -ml-1.5 outline-none
             hover:border-[var(--color-border)] focus:border-indigo-500/50 transition-colors"
         />
+        <button
+          onClick={() => {
+            useWorkflowStore.getState().openPreviewPanel(selectedNode.id);
+          }}
+          className="mt-3 w-full py-1.5 px-3 rounded-md bg-indigo-500/10 text-indigo-400 
+            hover:bg-indigo-500/20 text-xs font-medium border border-indigo-500/20 transition-colors flex items-center justify-center gap-1"
+        >
+          <Database size={13} />
+          Preview Data
+        </button>
       </div>
 
       {/* Description */}

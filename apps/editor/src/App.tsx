@@ -6,6 +6,7 @@ import { Canvas } from './components/Canvas.js';
 import { PropertyPanel } from './components/PropertyPanel.js';
 import { Toasts } from './components/Toasts.js';
 import { GroupBar } from './components/GroupBar.js';
+import { PreviewPanel } from './components/PreviewPanel.js';
 import { useWorkflowStore } from './store/workflow-store.js';
 import { useAuthStore } from './lib/auth-store.js';
 import { LoginPage } from './components/LoginPage.js';
@@ -69,6 +70,7 @@ export default function App() {
           <div className="flex-1 relative flex">
             <Canvas />
             <GroupBar />
+            <PreviewPanel />
           </div>
 
           {/* Right: Property panel (conditional) */}

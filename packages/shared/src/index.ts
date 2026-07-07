@@ -36,6 +36,8 @@ export {
   SCHEMA_VERSION,
 } from './types.js';
 
+export * from './preview.js';
+
 // Re-export utilities
 export {
   generateId,

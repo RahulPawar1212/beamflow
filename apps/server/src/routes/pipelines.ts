@@ -16,6 +16,89 @@ import type { SerializedWorkflow } from '@beamflow/shared';
 import type { IStorage } from '../storage.js';
 import { notFound, badRequest, ApiError } from '../errors.js';
 
+/**
+ * Parse raw database driver errors into user-friendly messages.
+ * Strips ODBC driver chain prefixes and pattern-matches common errors.
+ */
+function humanizeDbError(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+
+  // Strip ODBC driver chain: [Microsoft][ODBC Driver 18 for SQL Server][SQL Server]
+  const stripped = raw.replace(/\[Microsoft\]\[.*?\]/gi, '').trim();
+
+  // Pattern-match common SQL Server / PostgreSQL errors
+  const patterns: Array<{ re: RegExp; msg: (m: RegExpMatchArray) => string }> = [
+    {
+      re: /Invalid object name '([^']+)'/i,
+      msg: (m) => `Table or view "${m[1]}" was not found. Check the table name and database schema.`,
+    },
+    {
+      re: /Invalid column name '([^']+)'/i,
+      msg: (m) => `Column "${m[1]}" does not exist in the query result.`,
+    },
+    {
+      re: /Login failed for user '([^']+)'/i,
+      msg: (m) => `Authentication failed for user "${m[1]}". Check your username and password.`,
+    },
+    {
+      re: /Cannot open database "([^"]+)"/i,
+      msg: (m) => `Database "${m[1]}" does not exist or is inaccessible. Verify the database name.`,
+    },
+    {
+      re: /relation "([^"]+)" does not exist/i,
+      msg: (m) => `Table or view "${m[1]}" was not found. Check the table name and schema.`,
+    },
+    {
+      re: /column "([^"]+)" does not exist/i,
+      msg: (m) => `Column "${m[1]}" does not exist in the query result.`,
+    },
+    {
+      re: /password authentication failed for user "([^"]+)"/i,
+      msg: (m) => `Authentication failed for user "${m[1]}". Check your username and password.`,
+    },
+    {
+      re: /database "([^"]+)" does not exist/i,
+      msg: (m) => `Database "${m[1]}" does not exist. Verify the database name.`,
+    },
+    {
+      re: /ECONNREFUSED/i,
+      msg: () => `Connection refused. The database server is not reachable at the specified host and port.`,
+    },
+    {
+      re: /ETIMEOUT|ETIMEDOUT|connect TIMEOUT/i,
+      msg: () => `Connection timed out. Verify the host address and port, and check firewall settings.`,
+    },
+    {
+      re: /ENOTFOUND/i,
+      msg: () => `Server not found. The hostname could not be resolved. Check the server address.`,
+    },
+    {
+      re: /Incorrect syntax near (.+)/i,
+      msg: (m) => `SQL syntax error near ${m[1].trim()}. Review your query for typos.`,
+    },
+    {
+      re: /syntax error at or near "([^"]+)"/i,
+      msg: (m) => `SQL syntax error near "${m[1]}". Review your query for typos.`,
+    },
+    {
+      re: /Trusted_Connection|SSPI/i,
+      msg: () => `Windows Authentication failed. Ensure the server supports integrated security and the ODBC driver is installed.`,
+    },
+    {
+      re: /SSL|certificate/i,
+      msg: () => `SSL/TLS connection error. The server may require an encrypted connection or a trusted certificate.`,
+    },
+  ];
+
+  for (const { re, msg } of patterns) {
+    const match = raw.match(re);
+    if (match) return msg(match);
+  }
+
+  // Fallback: return the stripped (de-ODBC'd) message
+  return stripped || raw;
+}
+
 /** In-memory execution result cache. */
 const executionResults = new Map<string, unknown>();
 
@@ -419,7 +502,7 @@ export async function pipelineRoutes(
           return reply.send({ columns });
         } catch (error) {
           if (error instanceof ApiError) throw error;
-          throw new ApiError(500, error instanceof Error ? error.message : String(error));
+          throw new ApiError(500, humanizeDbError(error));
         }
       },
     );
@@ -496,7 +579,7 @@ export async function pipelineRoutes(
         } catch (error) {
           return reply.send({
             success: false,
-            error: error instanceof Error ? error.message : String(error)
+            error: humanizeDbError(error)
           });
         }
       }

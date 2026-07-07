@@ -6,11 +6,11 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   Save, Play, Code2, Undo2, Redo2, Download, Upload,
   Loader2, Zap, Copy, Check, X, CheckCircle2, XCircle, FileCode2,
-  Sun, Moon, SunDim, LogOut, User
+  Sun, Moon, SunDim, LogOut, User, FolderOpen, Plus, Trash2, Clock
 } from 'lucide-react';
 import { useWorkflowStore } from '../store/workflow-store.js';
 import { useAuthStore } from '../lib/auth-store.js';
-import { api } from '../api/client.js';
+import { api, type PipelineSummary } from '../api/client.js';
 import {
   Dialog,
   DialogContent,
@@ -48,8 +48,10 @@ export function Toolbar() {
   const nodeCount = useWorkflowStore((s) => s.nodes.length);
   const theme = useWorkflowStore((s) => s.theme);
   const toggleTheme = useWorkflowStore((s) => s.toggleTheme);
+  const clearWorkflow = useWorkflowStore((s) => s.clearWorkflow);
 
   const [showCode, setShowCode] = useState(false);
+  const [showSwitcher, setShowSwitcher] = useState(false);
 
   // ─── Save ─────────────────────────────────────────────────────────
 
@@ -234,6 +236,16 @@ export function Toolbar() {
 
         {/* Action buttons */}
         <div className="flex items-center gap-1">
+          {/* Workflows */}
+          <ToolbarButton
+            icon={FolderOpen}
+            label="Workflows"
+            hint="Switch or create workflows"
+            onClick={() => setShowSwitcher(true)}
+          />
+
+          <div className="w-px h-5 bg-[var(--color-border)] mx-1" />
+
           {/* Undo/Redo */}
           <ToolbarButton
             icon={Undo2}
@@ -324,6 +336,25 @@ export function Toolbar() {
 
       {/* Code Preview Modal */}
       {showCode && <CodeModal onClose={() => setShowCode(false)} />}
+
+      {/* Workflow Switcher Modal */}
+      {showSwitcher && (
+        <WorkflowSwitcherModal
+          onClose={() => setShowSwitcher(false)}
+          onSelect={(id) => {
+            setShowSwitcher(false);
+            api.getPipeline(id).then((wf) => {
+              loadWorkflow(wf);
+            }).catch((err) => {
+              addToast('error', `Failed to load workflow: ${err instanceof Error ? err.message : err}`);
+            });
+          }}
+          onNew={() => {
+            setShowSwitcher(false);
+            clearWorkflow();
+          }}
+        />
+      )}
 
       {/* Execution Logs Panel */}
       <ExecutionPanel />
@@ -436,6 +467,166 @@ function CodeModal({ onClose }: { onClose: () => void }) {
             </div>
           </div>
         )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── Workflow Switcher Modal ────────────────────────────────────────
+
+function WorkflowSwitcherModal({
+  onClose,
+  onSelect,
+  onNew,
+}: {
+  onClose: () => void;
+  onSelect: (id: string) => void;
+  onNew: () => void;
+}) {
+  const [pipelines, setPipelines] = useState<PipelineSummary[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const currentId = useWorkflowStore((s) => s.pipelineId);
+  const addToast = useWorkflowStore((s) => s.addToast);
+
+  useEffect(() => {
+    let mounted = true;
+    api
+      .listPipelines()
+      .then((res) => {
+        if (mounted) {
+          setPipelines(res.pipelines);
+          setLoading(false);
+        }
+      })
+      .catch((err) => {
+        if (mounted) {
+          setError(err instanceof Error ? err.message : 'Failed to load workflows');
+          setLoading(false);
+        }
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const handleDelete = async (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    if (!confirm('Are you sure you want to delete this workflow?')) return;
+    try {
+      await api.deletePipeline(id);
+      setPipelines((prev) => prev.filter((p) => p.id !== id));
+      addToast('success', 'Workflow deleted');
+      if (currentId === id) {
+        onNew();
+      }
+    } catch (err) {
+      addToast('error', `Failed to delete: ${err instanceof Error ? err.message : err}`);
+    }
+  };
+
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="max-w-[95vw] sm:max-w-3xl w-full p-0 gap-0 overflow-hidden bg-[var(--color-surface-100)] border-[var(--color-border)]">
+        <DialogHeader className="px-5 py-4 pr-12 border-b border-[var(--color-border)] bg-[var(--color-surface-200)]">
+          <DialogTitle className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <FolderOpen size={18} className="text-indigo-400" />
+              <span className="text-gray-200 text-base">Saved Workflows</span>
+            </div>
+            <Button
+              onClick={onNew}
+              variant="default"
+              size="sm"
+              className="bg-indigo-600 hover:bg-indigo-500 text-white font-medium shadow-sm h-8 px-3"
+            >
+              <Plus size={14} className="mr-1.5" />
+              New Workflow
+            </Button>
+          </DialogTitle>
+        </DialogHeader>
+
+        <div className="flex-1 overflow-y-auto max-h-[75vh] p-4 bg-[var(--color-surface-100)]">
+          {loading ? (
+            <div className="flex items-center justify-center py-12 text-gray-500 gap-2">
+              <Loader2 size={16} className="animate-spin" />
+              Loading workflows...
+            </div>
+          ) : error ? (
+            <div className="text-center py-8 text-red-400 text-sm">
+              <XCircle size={24} className="mx-auto mb-2 opacity-50" />
+              {error}
+            </div>
+          ) : pipelines.length === 0 ? (
+            <div className="text-center py-12">
+              <FolderOpen size={32} className="mx-auto mb-3 text-gray-600" />
+              <p className="text-sm font-medium text-gray-400">No saved workflows</p>
+              <p className="text-xs text-gray-500 mt-1">Create a new workflow and save it to see it here.</p>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-2">
+              {pipelines.map((p) => {
+                const isCurrent = p.id === currentId;
+                const date = new Date(p.updatedAt).toLocaleDateString(undefined, {
+                  month: 'short',
+                  day: 'numeric',
+                  year: 'numeric',
+                });
+                return (
+                  <div
+                    key={p.id}
+                    onClick={() => !isCurrent && onSelect(p.id)}
+                    className={`group relative px-4 py-3 rounded-lg border flex items-center justify-between transition-all cursor-pointer
+                      ${isCurrent
+                        ? 'border-indigo-500/50 bg-indigo-500/10 cursor-default'
+                        : 'border-[var(--color-border)] bg-[var(--color-surface-200)]/40 hover:border-gray-500 hover:bg-[var(--color-surface-200)]'
+                      }`}
+                  >
+                    <div className="flex items-center gap-4 min-w-0">
+                      <div className="min-w-0">
+                        <h4 className="text-sm font-bold text-gray-200 truncate pr-2">
+                          {p.name}
+                        </h4>
+                      </div>
+                      {isCurrent && (
+                        <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 text-[10px] font-bold shrink-0">
+                          <span className="w-1.5 h-1.5 rounded-full bg-indigo-400" />
+                          Active
+                        </span>
+                      )}
+                    </div>
+                    
+                    <div className="flex items-center gap-6 text-[11px] text-gray-500 font-medium shrink-0">
+                      <div className="flex items-center gap-1.5" title="Number of nodes">
+                        <div className="flex gap-0.5 items-end h-3">
+                          <div className="w-1 h-1.5 bg-gray-500/60 rounded-sm" />
+                          <div className="w-1 h-2.5 bg-gray-500/60 rounded-sm" />
+                          <div className="w-1 h-2 bg-gray-500/60 rounded-sm" />
+                        </div>
+                        {p.nodeCount} {p.nodeCount === 1 ? 'node' : 'nodes'}
+                      </div>
+                      <div className="flex items-center gap-1.5 min-w-[70px]" title="Last updated">
+                        <Clock size={12} className="opacity-70" />
+                        {date}
+                      </div>
+                      {!isCurrent ? (
+                        <button
+                          onClick={(e) => handleDelete(e, p.id)}
+                          className="p-1.5 rounded-md text-gray-500 opacity-0 group-hover:opacity-100 hover:text-red-400 hover:bg-red-500/10 transition-all ml-2"
+                          title="Delete workflow"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      ) : (
+                        <div className="w-[36px] ml-2" /> // spacer for alignment with trash icon
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </DialogContent>
     </Dialog>
   );

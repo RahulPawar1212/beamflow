@@ -5,7 +5,7 @@
 
 import React from 'react';
 import { createPortal } from 'react-dom';
-import { X, Settings2, Trash2, Plus } from 'lucide-react';
+import { X, Settings2, Trash2, Plus, Database } from 'lucide-react';
 import { useWorkflowStore } from '../store/workflow-store.js';
 import { useSchemaStore } from '../lib/schema-store.js';
 import { api } from '../api/client.js';
@@ -491,6 +491,43 @@ function SettingControl({ setting, value, onChange, inputColumns }: SettingContr
   );
 }
 
+// ─── Saved Connections (localStorage per user) ─────────────────────
+
+interface SavedConnection {
+  id: string;
+  name: string;
+  provider: string;
+  host: string;
+  port: number;
+  databaseName: string;
+  authType: string;
+  username: string;
+  password: string;
+  sqlitePath: string;
+  createdAt: string;
+}
+
+function getSavedConnections(): SavedConnection[] {
+  try {
+    const userJson = localStorage.getItem('bf_user');
+    const userId = userJson ? JSON.parse(userJson).id : 'default';
+    const raw = localStorage.getItem(`beamflow.connections.${userId}`);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function setSavedConnections(connections: SavedConnection[]) {
+  try {
+    const userJson = localStorage.getItem('bf_user');
+    const userId = userJson ? JSON.parse(userJson).id : 'default';
+    localStorage.setItem(`beamflow.connections.${userId}`, JSON.stringify(connections));
+  } catch {
+    // Silently ignore storage errors
+  }
+}
+
 // ─── Connection Builder Modal ───────────────────────────────────────
 
 interface ConnectionBuilderModalProps {
@@ -522,12 +559,17 @@ function ConnectionBuilderModal({ isOpen, onClose, settings, onSave }: Connectio
   const [sqlitePath, setSqlitePath] = React.useState(settings.sqlitePath || 'beamflow.db');
   const [containsProduction, setContainsProduction] = React.useState(settings.containsProduction || false);
   const [rememberConnection, setRememberConnection] = React.useState(settings.rememberConnection !== false);
+  const [connectionName, setConnectionName] = React.useState('');
 
   const [testStatus, setTestStatus] = React.useState<{ type: 'success' | 'error' | null; message: string }>({
     type: null,
     message: '',
   });
   const [isTesting, setIsTesting] = React.useState(false);
+
+  // Saved connections state
+  const [savedConnections, setSavedConnectionsState] = React.useState<SavedConnection[]>(() => getSavedConnections());
+  const [selectedSavedId, setSelectedSavedId] = React.useState<string | null>(null);
 
   // Auto-assemble connection string based on form details
   const getConnectionString = () => {
@@ -564,8 +606,62 @@ function ConnectionBuilderModal({ isOpen, onClose, settings, onSave }: Connectio
     }
   };
 
+  const loadSavedConnection = (conn: SavedConnection) => {
+    setSelectedSavedId(conn.id);
+    setProvider(conn.provider);
+    setHost(conn.host);
+    setPort(conn.port);
+    setDatabaseName(conn.databaseName);
+    setAuthType(conn.authType);
+    setUsername(conn.username);
+    setPassword(conn.password);
+    setSqlitePath(conn.sqlitePath);
+    setConnectionName(conn.name);
+    setTestStatus({ type: null, message: '' });
+  };
+
+  const handleSaveConnection = () => {
+    const name = connectionName.trim() || `${provider} - ${host}${databaseName ? '/' + databaseName : ''}`;
+    const newConn: SavedConnection = {
+      id: selectedSavedId || `conn_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
+      name,
+      provider,
+      host,
+      port: Number(port),
+      databaseName,
+      authType,
+      username,
+      password,
+      sqlitePath,
+      createdAt: new Date().toISOString(),
+    };
+
+    let updated: SavedConnection[];
+    if (selectedSavedId) {
+      // Update existing
+      updated = savedConnections.map((c) => (c.id === selectedSavedId ? newConn : c));
+    } else {
+      // Add new
+      updated = [...savedConnections, newConn];
+    }
+    setSavedConnections(updated);
+    setSavedConnectionsState(updated);
+    setSelectedSavedId(newConn.id);
+  };
+
+  const handleDeleteConnection = (id: string) => {
+    const updated = savedConnections.filter((c) => c.id !== id);
+    setSavedConnections(updated);
+    setSavedConnectionsState(updated);
+    if (selectedSavedId === id) setSelectedSavedId(null);
+  };
+
   const handleSave = () => {
     const connStr = getConnectionString();
+    // If "Remember" is checked, also persist the connection
+    if (rememberConnection) {
+      handleSaveConnection();
+    }
     onSave(connStr, {
       connectionProvider: provider,
       host,
@@ -582,7 +678,7 @@ function ConnectionBuilderModal({ isOpen, onClose, settings, onSave }: Connectio
 
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-md p-4 animate-fade-in">
-      <div className="w-[500px] bg-[var(--color-surface-100)] border border-[var(--color-border)] rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+      <div className="w-[720px] bg-[var(--color-surface-100)] border border-[var(--color-border)] rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
         {/* Header */}
         <div className="px-6 py-4 border-b border-[var(--color-border)] flex items-center justify-between bg-[var(--color-surface-200)]">
           <div className="flex items-center gap-2">
@@ -594,251 +690,326 @@ function ConnectionBuilderModal({ isOpen, onClose, settings, onSave }: Connectio
               <p className="text-[10px] text-gray-500">Configure database credentials & options</p>
             </div>
           </div>
-          <button 
-            onClick={onClose} 
+          <button
+            onClick={onClose}
             className="p-1 rounded-md hover:bg-white/10 text-gray-400 hover:text-gray-200 transition-colors"
           >
             <X size={16} />
           </button>
         </div>
 
-        {/* Content */}
-        <div className="p-6 flex flex-col gap-5 overflow-y-auto flex-1">
-          {/* Provider Selection (Cards style) */}
-          <div>
-            <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-2">
-              Select Provider
-            </label>
-            <div className="grid grid-cols-3 gap-3">
-              {/* PostgreSQL Card */}
-              <div
-                onClick={() => selectProvider('PostgreSQL')}
-                className={`p-3 border rounded-xl cursor-pointer transition-all flex flex-col gap-1.5
-                  ${provider === 'PostgreSQL' 
-                    ? 'border-indigo-500 bg-indigo-500/5 shadow-md shadow-indigo-500/5' 
-                    : 'border-[var(--color-border)] bg-[var(--color-surface-200)]/40 hover:border-gray-700'}`}
-              >
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-bold text-gray-200">PostgreSQL</span>
-                  <div className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center
-                    ${provider === 'PostgreSQL' ? 'border-indigo-500 bg-indigo-500' : 'border-gray-600'}`}>
-                    {provider === 'PostgreSQL' && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
-                  </div>
+        {/* Body: 2-column layout */}
+        <div className="flex flex-1 overflow-hidden">
+          {/* Left: Saved Connections List */}
+          <div className="w-[200px] border-r border-[var(--color-border)] bg-[var(--color-surface-200)]/30 flex flex-col">
+            <div className="px-3 py-2.5 border-b border-[var(--color-border)]">
+              <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Saved Connections</span>
+            </div>
+            <div className="flex-1 overflow-y-auto p-1.5">
+              {savedConnections.length === 0 ? (
+                <div className="p-3 text-center">
+                  <Database size={20} className="mx-auto text-gray-600 mb-2" />
+                  <p className="text-[10px] text-gray-600">No saved connections yet</p>
                 </div>
-                <span className="text-[10px] text-gray-500">Connect to remote/local postgres</span>
-              </div>
-
-              {/* SQLite Card */}
-              <div
-                onClick={() => selectProvider('SQLite')}
-                className={`p-3 border rounded-xl cursor-pointer transition-all flex flex-col gap-1.5
-                  ${provider === 'SQLite' 
-                    ? 'border-indigo-500 bg-indigo-500/5 shadow-md shadow-indigo-500/5' 
-                    : 'border-[var(--color-border)] bg-[var(--color-surface-200)]/40 hover:border-gray-700'}`}
-              >
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-bold text-gray-200">SQLite (local)</span>
-                  <div className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center
-                    ${provider === 'SQLite' ? 'border-indigo-500 bg-indigo-500' : 'border-gray-600'}`}>
-                    {provider === 'SQLite' && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
-                  </div>
+              ) : (
+                <div className="flex flex-col gap-1">
+                  {savedConnections.map((conn) => (
+                    <div
+                      key={conn.id}
+                      className={`group flex items-center gap-1.5 px-2.5 py-2 rounded-lg cursor-pointer transition-all text-left
+                        ${selectedSavedId === conn.id
+                          ? 'bg-indigo-500/15 border border-indigo-500/30 text-indigo-300'
+                          : 'hover:bg-white/5 border border-transparent text-gray-400 hover:text-gray-300'
+                        }`}
+                    >
+                      <div className="flex-1 min-w-0" onClick={() => loadSavedConnection(conn)}>
+                        <div className="text-[11px] font-semibold truncate">{conn.name}</div>
+                        <div className="text-[9px] text-gray-500 truncate">{conn.provider} · {conn.host || conn.sqlitePath}</div>
+                      </div>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleDeleteConnection(conn.id); }}
+                        className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-red-500/20 hover:text-red-400 transition-all flex-shrink-0"
+                        title="Delete connection"
+                      >
+                        <Trash2 size={11} />
+                      </button>
+                    </div>
+                  ))}
                 </div>
-                <span className="text-[10px] text-gray-500">Query local SQLite file</span>
-              </div>
-
-              {/* SQL Server Card */}
-              <div
-                onClick={() => selectProvider('SQLServer')}
-                className={`p-3 border rounded-xl cursor-pointer transition-all flex flex-col gap-1.5
-                  ${provider === 'SQLServer' 
-                    ? 'border-indigo-500 bg-indigo-500/5 shadow-md shadow-indigo-500/5' 
-                    : 'border-[var(--color-border)] bg-[var(--color-surface-200)]/40 hover:border-gray-700'}`}
+              )}
+            </div>
+            <div className="p-2 border-t border-[var(--color-border)]">
+              <button
+                onClick={() => {
+                  setSelectedSavedId(null);
+                  setConnectionName('');
+                  setProvider('PostgreSQL');
+                  setHost('localhost');
+                  setPort(5432);
+                  setDatabaseName('');
+                  setAuthType('Windows');
+                  setUsername('');
+                  setPassword('');
+                  setSqlitePath('beamflow.db');
+                  setTestStatus({ type: null, message: '' });
+                }}
+                className="w-full px-2 py-1.5 rounded-lg text-[10px] font-bold text-gray-400 hover:text-indigo-400 hover:bg-indigo-500/10 border border-transparent hover:border-indigo-500/20 transition-all flex items-center justify-center gap-1"
               >
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-bold text-gray-200">SQL Server</span>
-                  <div className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center
-                    ${provider === 'SQLServer' ? 'border-indigo-500 bg-indigo-500' : 'border-gray-600'}`}>
-                    {provider === 'SQLServer' && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
-                  </div>
-                </div>
-                <span className="text-[10px] text-gray-500">Query Microsoft SQL Server</span>
-              </div>
+                <Plus size={11} /> New Connection
+              </button>
             </div>
           </div>
 
-          {/* SQLite configuration */}
-          {provider === 'SQLite' && (
-            <div className="flex flex-col gap-3 animate-fade-in">
-              <div>
-                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1.5">
-                  Database File Path
-                </label>
-                <input
-                  type="text"
-                  value={sqlitePath}
-                  onChange={(e) => setSqlitePath(e.target.value)}
-                  placeholder="e.g. beamflow.db"
-                  className="w-full px-3 py-2 text-xs rounded-lg bg-[var(--color-surface-200)] border border-[var(--color-border)] text-gray-300 placeholder-gray-600 outline-none focus:border-indigo-500/50 transition-colors"
-                />
-                <p className="text-[9px] text-gray-600 mt-1">Specify absolute path or local file name relative to workspace root.</p>
+          {/* Right: Connection Form */}
+          <div className="flex-1 p-5 flex flex-col gap-4 overflow-y-auto">
+            {/* Connection Name */}
+            <div>
+              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1.5">
+                Connection Name
+              </label>
+              <input
+                type="text"
+                value={connectionName}
+                onChange={(e) => setConnectionName(e.target.value)}
+                placeholder="e.g. Production SQL Server"
+                className="w-full px-3 py-2 text-xs rounded-lg bg-[var(--color-surface-200)] border border-[var(--color-border)] text-gray-300 placeholder-gray-600 outline-none focus:border-indigo-500/50 transition-colors"
+              />
+            </div>
+
+            {/* Provider Selection (Cards style) */}
+            <div>
+              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-2">
+                Select Provider
+              </label>
+              <div className="grid grid-cols-3 gap-2">
+                {/* PostgreSQL Card */}
+                <div
+                  onClick={() => selectProvider('PostgreSQL')}
+                  className={`p-2.5 border rounded-xl cursor-pointer transition-all flex flex-col gap-1
+                    ${provider === 'PostgreSQL'
+                      ? 'border-indigo-500 bg-indigo-500/5 shadow-md shadow-indigo-500/5'
+                      : 'border-[var(--color-border)] bg-[var(--color-surface-200)]/40 hover:border-gray-700'}`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-gray-200">PostgreSQL</span>
+                    <div className={`w-3 h-3 rounded-full border flex items-center justify-center
+                      ${provider === 'PostgreSQL' ? 'border-indigo-500 bg-indigo-500' : 'border-gray-600'}`}>
+                      {provider === 'PostgreSQL' && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
+                    </div>
+                  </div>
+                  <span className="text-[9px] text-gray-500">Remote / local postgres</span>
+                </div>
+
+                {/* SQLite Card */}
+                <div
+                  onClick={() => selectProvider('SQLite')}
+                  className={`p-2.5 border rounded-xl cursor-pointer transition-all flex flex-col gap-1
+                    ${provider === 'SQLite'
+                      ? 'border-indigo-500 bg-indigo-500/5 shadow-md shadow-indigo-500/5'
+                      : 'border-[var(--color-border)] bg-[var(--color-surface-200)]/40 hover:border-gray-700'}`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-gray-200">SQLite</span>
+                    <div className={`w-3 h-3 rounded-full border flex items-center justify-center
+                      ${provider === 'SQLite' ? 'border-indigo-500 bg-indigo-500' : 'border-gray-600'}`}>
+                      {provider === 'SQLite' && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
+                    </div>
+                  </div>
+                  <span className="text-[9px] text-gray-500">Local SQLite file</span>
+                </div>
+
+                {/* SQL Server Card */}
+                <div
+                  onClick={() => selectProvider('SQLServer')}
+                  className={`p-2.5 border rounded-xl cursor-pointer transition-all flex flex-col gap-1
+                    ${provider === 'SQLServer'
+                      ? 'border-indigo-500 bg-indigo-500/5 shadow-md shadow-indigo-500/5'
+                      : 'border-[var(--color-border)] bg-[var(--color-surface-200)]/40 hover:border-gray-700'}`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-gray-200">SQL Server</span>
+                    <div className={`w-3 h-3 rounded-full border flex items-center justify-center
+                      ${provider === 'SQLServer' ? 'border-indigo-500 bg-indigo-500' : 'border-gray-600'}`}>
+                      {provider === 'SQLServer' && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
+                    </div>
+                  </div>
+                  <span className="text-[9px] text-gray-500">Microsoft SQL Server</span>
+                </div>
               </div>
             </div>
-          )}
 
-          {/* PostgreSQL & SQL Server configuration */}
-          {(provider === 'PostgreSQL' || provider === 'SQLServer') && (
-            <div className="flex flex-col gap-4 animate-fade-in">
-              {/* Server Host & Port */}
-              <div className="grid grid-cols-3 gap-3">
-                <div className="col-span-2">
-                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1.5">Server Host</label>
+            {/* SQLite configuration */}
+            {provider === 'SQLite' && (
+              <div className="flex flex-col gap-3 animate-fade-in">
+                <div>
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1.5">
+                    Database File Path
+                  </label>
                   <input
                     type="text"
-                    value={host}
-                    onChange={(e) => setHost(e.target.value)}
-                    placeholder="localhost"
+                    value={sqlitePath}
+                    onChange={(e) => setSqlitePath(e.target.value)}
+                    placeholder="e.g. beamflow.db"
                     className="w-full px-3 py-2 text-xs rounded-lg bg-[var(--color-surface-200)] border border-[var(--color-border)] text-gray-300 placeholder-gray-600 outline-none focus:border-indigo-500/50 transition-colors"
                   />
-                </div>
-                <div>
-                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1.5">Port</label>
-                  <input
-                    type="number"
-                    value={port}
-                    onChange={(e) => setPort(Number(e.target.value))}
-                    placeholder="5432"
-                    className="w-full px-3 py-2 text-xs rounded-lg bg-[var(--color-surface-200)] border border-[var(--color-border)] text-gray-300 placeholder-gray-600 outline-none focus:border-indigo-500/50 transition-colors"
-                  />
+                  <p className="text-[9px] text-gray-600 mt-1">Specify absolute path or local file name relative to workspace root.</p>
                 </div>
               </div>
+            )}
 
-              {/* Logon Details */}
-              <div className="border border-[var(--color-border)] rounded-xl overflow-hidden bg-[var(--color-surface-200)]/15">
-                <div className="px-4 py-2 border-b border-[var(--color-border)] bg-[var(--color-surface-200)]/45">
-                  <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Logon Authentication</span>
-                </div>
-                <div className="p-4 flex flex-col gap-3">
-                  <div className="flex gap-4">
-                    <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
-                      <input
-                        type="radio"
-                        name="authType"
-                        checked={authType === 'Windows'}
-                        onChange={() => setAuthType('Windows')}
-                        className="text-indigo-500 focus:ring-indigo-500/30"
-                      />
-                      Windows Authentication
-                    </label>
-                    <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
-                      <input
-                        type="radio"
-                        name="authType"
-                        checked={authType === 'SQL'}
-                        onChange={() => setAuthType('SQL')}
-                        className="text-indigo-500 focus:ring-indigo-500/30"
-                      />
-                      SQL Authentication
-                    </label>
+            {/* PostgreSQL & SQL Server configuration */}
+            {(provider === 'PostgreSQL' || provider === 'SQLServer') && (
+              <div className="flex flex-col gap-3 animate-fade-in">
+                {/* Server Host & Port */}
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="col-span-2">
+                    <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1.5">Server Host</label>
+                    <input
+                      type="text"
+                      value={host}
+                      onChange={(e) => setHost(e.target.value)}
+                      placeholder="localhost"
+                      className="w-full px-3 py-2 text-xs rounded-lg bg-[var(--color-surface-200)] border border-[var(--color-border)] text-gray-300 placeholder-gray-600 outline-none focus:border-indigo-500/50 transition-colors"
+                    />
                   </div>
+                  <div>
+                    <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1.5">Port</label>
+                    <input
+                      type="number"
+                      value={port}
+                      onChange={(e) => setPort(Number(e.target.value))}
+                      placeholder={provider === 'SQLServer' ? '1433' : '5432'}
+                      className="w-full px-3 py-2 text-xs rounded-lg bg-[var(--color-surface-200)] border border-[var(--color-border)] text-gray-300 placeholder-gray-600 outline-none focus:border-indigo-500/50 transition-colors"
+                    />
+                  </div>
+                </div>
 
-                  {authType === 'SQL' && (
-                    <div className="grid grid-cols-2 gap-3 mt-1 animate-fade-in">
-                      <div>
-                        <label className="text-[9px] font-semibold text-gray-500 block mb-1">Username</label>
+                {/* Logon Details */}
+                <div className="border border-[var(--color-border)] rounded-xl overflow-hidden bg-[var(--color-surface-200)]/15">
+                  <div className="px-3 py-2 border-b border-[var(--color-border)] bg-[var(--color-surface-200)]/45">
+                    <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Authentication</span>
+                  </div>
+                  <div className="p-3 flex flex-col gap-3">
+                    <div className="flex gap-4">
+                      <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
                         <input
-                          type="text"
-                          value={username}
-                          onChange={(e) => setUsername(e.target.value)}
-                          placeholder="postgres"
-                          className="w-full px-3 py-1.5 text-xs rounded-lg bg-[var(--color-surface-200)] border border-[var(--color-border)] text-gray-300 placeholder-gray-600 outline-none focus:border-indigo-500/50"
+                          type="radio"
+                          name="authType"
+                          checked={authType === 'Windows'}
+                          onChange={() => setAuthType('Windows')}
+                          className="text-indigo-500 focus:ring-indigo-500/30"
                         />
-                      </div>
-                      <div>
-                        <label className="text-[9px] font-semibold text-gray-500 block mb-1">Password</label>
+                        Windows Auth
+                      </label>
+                      <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
                         <input
-                          type="password"
-                          value={password}
-                          onChange={(e) => setPassword(e.target.value)}
-                          placeholder="••••••••"
-                          className="w-full px-3 py-1.5 text-xs rounded-lg bg-[var(--color-surface-200)] border border-[var(--color-border)] text-gray-300 placeholder-gray-600 outline-none focus:border-indigo-500/50"
+                          type="radio"
+                          name="authType"
+                          checked={authType === 'SQL'}
+                          onChange={() => setAuthType('SQL')}
+                          className="text-indigo-500 focus:ring-indigo-500/30"
                         />
-                      </div>
+                        SQL Auth
+                      </label>
                     </div>
-                  )}
+
+                    {authType === 'SQL' && (
+                      <div className="grid grid-cols-2 gap-3 animate-fade-in">
+                        <div>
+                          <label className="text-[9px] font-semibold text-gray-500 block mb-1">Username</label>
+                          <input
+                            type="text"
+                            value={username}
+                            onChange={(e) => setUsername(e.target.value)}
+                            placeholder="sa"
+                            className="w-full px-3 py-1.5 text-xs rounded-lg bg-[var(--color-surface-200)] border border-[var(--color-border)] text-gray-300 placeholder-gray-600 outline-none focus:border-indigo-500/50"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[9px] font-semibold text-gray-500 block mb-1">Password</label>
+                          <input
+                            type="password"
+                            value={password}
+                            onChange={(e) => setPassword(e.target.value)}
+                            placeholder="••••••••"
+                            className="w-full px-3 py-1.5 text-xs rounded-lg bg-[var(--color-surface-200)] border border-[var(--color-border)] text-gray-300 placeholder-gray-600 outline-none focus:border-indigo-500/50"
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Database Name */}
+                <div>
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1.5">Database Name</label>
+                  <input
+                    type="text"
+                    value={databaseName}
+                    onChange={(e) => setDatabaseName(e.target.value)}
+                    placeholder="e.g. sales_db"
+                    className="w-full px-3 py-2 text-xs rounded-lg bg-[var(--color-surface-200)] border border-[var(--color-border)] text-gray-300 placeholder-gray-600 outline-none focus:border-indigo-500/50 transition-colors"
+                  />
                 </div>
               </div>
+            )}
 
-              {/* Database Select */}
-              <div>
-                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1.5">Database Name</label>
+            {/* Options */}
+            <div className="flex flex-col gap-2 border-t border-[var(--color-border)] pt-3">
+              <label className="flex items-center gap-2.5 text-xs text-gray-300 cursor-pointer">
                 <input
-                  type="text"
-                  value={databaseName}
-                  onChange={(e) => setDatabaseName(e.target.value)}
-                  placeholder="e.g. sales_db"
-                  className="w-full px-3 py-2 text-xs rounded-lg bg-[var(--color-surface-200)] border border-[var(--color-border)] text-gray-300 placeholder-gray-600 outline-none focus:border-indigo-500/50 transition-colors"
+                  type="checkbox"
+                  checked={rememberConnection}
+                  onChange={(e) => setRememberConnection(e.target.checked)}
+                  className="rounded text-indigo-500 focus:ring-indigo-500/30 border-gray-600"
                 />
-              </div>
-            </div>
-          )}
+                Remember this connection
+              </label>
+              <label className="flex items-center gap-2.5 text-xs text-gray-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={containsProduction}
+                  onChange={(e) => setContainsProduction(e.target.checked)}
+                  className="rounded text-indigo-500 focus:ring-indigo-500/30 border-gray-600"
+                />
+                Contains production data
+              </label>
 
-          {/* Options checkboxes */}
-          <div className="flex flex-col gap-2 border-t border-[var(--color-border)] pt-4">
-            <label className="flex items-center gap-2.5 text-xs text-gray-300 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={rememberConnection}
-                onChange={(e) => setRememberConnection(e.target.checked)}
-                className="rounded text-indigo-500 focus:ring-indigo-500/30 border-gray-600"
-              />
-              Remember this connection
-            </label>
-            <label className="flex items-center gap-2.5 text-xs text-gray-300 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={containsProduction}
-                onChange={(e) => setContainsProduction(e.target.checked)}
-                className="rounded text-indigo-500 focus:ring-indigo-500/30 border-gray-600"
-              />
-              Contains production data
-            </label>
-            
-            {containsProduction && (
-              <div className="mt-1 p-2 rounded-lg bg-red-500/10 border border-red-500/20 text-[10px] text-red-400 font-semibold animate-pulse flex items-center gap-1.5">
-                <span>⚠️</span>
-                <span>Warning: This connection references a Production Database. Ensure you have read-only access.</span>
+              {containsProduction && (
+                <div className="mt-1 p-2 rounded-lg bg-red-500/10 border border-red-500/20 text-[10px] text-red-400 font-semibold animate-pulse flex items-center gap-1.5">
+                  <span>⚠️</span>
+                  <span>Warning: This connection references a Production Database. Ensure you have read-only access.</span>
+                </div>
+              )}
+            </div>
+
+            {/* Status Message */}
+            {testStatus.type && (
+              <div
+                className={`p-3 rounded-xl text-xs font-semibold border flex items-start gap-2 animate-fade-in ${testStatus.type === 'success'
+                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                    : 'bg-red-500/10 border-red-500/30 text-red-400'
+                  }`}
+              >
+                <span className="flex-shrink-0 mt-0.5">{testStatus.type === 'success' ? '✅' : '❌'}</span>
+                <span className="flex-1 leading-snug">{testStatus.message}</span>
               </div>
             )}
           </div>
-
-          {/* Status Message */}
-          {testStatus.type && (
-            <div
-              className={`p-3 rounded-xl text-xs font-semibold mt-1 border flex items-center gap-2 animate-fade-in ${
-                testStatus.type === 'success'
-                  ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
-                  : 'bg-red-500/10 border-red-500/30 text-red-400'
-              }`}
-            >
-              <span>{testStatus.type === 'success' ? '✅' : '❌'}</span>
-              <span className="flex-1 leading-snug">{testStatus.message}</span>
-            </div>
-          )}
         </div>
 
         {/* Footer Actions */}
-        <div className="px-6 py-4 border-t border-[var(--color-border)] bg-[var(--color-surface-200)] flex justify-between gap-3 items-center">
+        <div className="px-5 py-3 border-t border-[var(--color-border)] bg-[var(--color-surface-200)] flex justify-between gap-3 items-center">
           <button
             onClick={handleTest}
             disabled={isTesting}
             className={`px-4 py-2 rounded-lg text-xs font-bold transition-all border
-              ${
-                isTesting
-                  ? 'bg-gray-500/10 text-gray-500 border-gray-500/20 cursor-not-allowed'
-                  : 'bg-indigo-500/10 border-indigo-500/20 hover:border-indigo-500/40 text-indigo-400 hover:bg-indigo-500/20 hover:scale-[1.02] active:scale-[0.98]'
+              ${isTesting
+                ? 'bg-gray-500/10 text-gray-500 border-gray-500/20 cursor-not-allowed'
+                : 'bg-indigo-500/10 border-indigo-500/20 hover:border-indigo-500/40 text-indigo-400 hover:bg-indigo-500/20 hover:scale-[1.02] active:scale-[0.98]'
               }`}
           >
-            {isTesting ? 'Testing connection...' : 'Test Connection'}
+            {isTesting ? 'Testing...' : 'Test Connection'}
           </button>
           <div className="flex gap-2">
             <button
@@ -851,7 +1022,7 @@ function ConnectionBuilderModal({ isOpen, onClose, settings, onSave }: Connectio
               onClick={handleSave}
               className="px-4 py-2 rounded-lg text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white transition-all shadow-md shadow-indigo-600/10 hover:scale-[1.02] active:scale-[0.98]"
             >
-              Save Connection
+              Save & Apply
             </button>
           </div>
         </div>
@@ -860,3 +1031,4 @@ function ConnectionBuilderModal({ isOpen, onClose, settings, onSave }: Connectio
     document.body
   );
 }
+

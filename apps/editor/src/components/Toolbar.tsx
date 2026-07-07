@@ -221,8 +221,7 @@ export function Toolbar() {
             value={pipelineName}
             onChange={(e) => setPipelineName(e.target.value)}
             spellCheck={false}
-            className="text-sm bg-transparent border border-transparent rounded-md px-1.5 py-0.5 outline-none text-gray-300
-              hover:border-[var(--color-border)] focus:border-indigo-500/50 focus:text-white min-w-[160px] max-w-[280px] font-medium transition-colors"
+            className="text-sm bg-transparent border border-transparent rounded-md px-1.5 py-0.5 outline-none text-[var(--color-text-secondary)] hover:border-[var(--color-border)] focus:border-indigo-500/50 focus:text-[var(--color-text-primary)] min-w-[160px] max-w-[280px] font-medium transition-colors"
           />
           {/* Dirty / saved indicator */}
           <SaveStatus isDirty={isDirty} isSaving={isSaving} />

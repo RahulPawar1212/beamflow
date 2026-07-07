@@ -57,32 +57,32 @@ const handleReadFromCSV: OperationHandler = (step, emitter, ctx) => {
 
   if (hasHeader) {
     // Parse CSV with headers
-    emitter.line(`${varName}_raw = p | '${step.label}_Read' >> ReadFromText('${toPythonString(filePath)}')`);
+    emitter.addFromImport('apache_beam.io.filesystems', 'FileSystems');
     emitter.blank();
-    emitter.line(`# Parse CSV rows with header`);
-    emitter.line(`class Parse${toPythonVar(step.id)}_CSV(beam.DoFn):`);
+    emitter.line(`# Read CSV header locally first to avoid distributed parsing issues`);
+    emitter.line(`with FileSystems.open('${toPythonString(filePath)}') as f:`);
     emitter.indent();
-    emitter.line(`def __init__(self):`);
-    emitter.indent();
-    emitter.line(`self.header = None`);
+    emitter.line(`wrapper = io.TextIOWrapper(f, encoding='utf-8')`);
+    emitter.line(`reader = csv.reader(wrapper, delimiter='${toPythonString(delimiter)}')`);
+    emitter.line(`raw_header = next(reader)`);
+    emitter.line(`header = [h.strip().lstrip('\\ufeff') for h in raw_header]`);
     emitter.dedent();
     emitter.blank();
-    emitter.line(`def process(self, element):`);
+    
+    emitter.line(`${varName}_raw = p | '${step.label}_Read' >> ReadFromText('${toPythonString(filePath)}', skip_header_lines=1)`);
+    
+    emitter.line(`def parse_${toPythonVar(step.id)}(element, header_cols):`);
     emitter.indent();
     emitter.line(`reader = csv.reader(io.StringIO(element), delimiter='${toPythonString(delimiter)}')`);
     emitter.line(`for row in reader:`);
     emitter.indent();
-    emitter.line(`if self.header is None:`);
-    emitter.indent();
-    emitter.line(`self.header = row`);
-    emitter.line(`continue`);
-    emitter.dedent();
-    emitter.line(`yield dict(zip(self.header, row))`);
-    emitter.dedent();
+    emitter.line(`clean_row = [v.strip() if isinstance(v, str) else v for v in row]`);
+    emitter.line(`yield dict(zip(header_cols, clean_row))`);
     emitter.dedent();
     emitter.dedent();
     emitter.blank();
-    emitter.line(`${varName} = ${varName}_raw | '${step.label}_Parse' >> beam.ParDo(Parse${toPythonVar(step.id)}_CSV())`);
+    
+    emitter.line(`${varName} = ${varName}_raw | '${step.label}_Parse' >> beam.FlatMap(parse_${toPythonVar(step.id)}, header_cols=header)`);
   } else {
     // Parse CSV without headers — return list of values
     emitter.line(`${varName}_raw = p | '${step.label}_Read' >> ReadFromText('${toPythonString(filePath)}')`);
@@ -299,9 +299,9 @@ function buildFilterCondition(
 
   switch (operator) {
     case '==':
-      return `lambda element: ${accessExpr} == '${toPythonString(value)}'`;
+      return `lambda element: str(${accessExpr}) == '${toPythonString(value)}'`;
     case '!=':
-      return `lambda element: ${accessExpr} != '${toPythonString(value)}'`;
+      return `lambda element: str(${accessExpr}) != '${toPythonString(value)}'`;
     case '>':
       return `lambda element: float(${accessExpr}) > ${value}`;
     case '<':
@@ -317,7 +317,7 @@ function buildFilterCondition(
     case 'is_null':
       return `lambda element: ${accessExpr} is None or ${accessExpr} == ''`;
     default:
-      return `lambda element: ${accessExpr} == '${toPythonString(value)}'`;
+      return `lambda element: str(${accessExpr}) == '${toPythonString(value)}'`;
   }
 }
 

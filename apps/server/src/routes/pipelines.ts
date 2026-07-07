@@ -6,6 +6,9 @@
 
 import type { FastifyInstance } from 'fastify';
 import * as fs from 'fs';
+import * as path from 'path';
+import * as util from 'util';
+import { pipeline } from 'stream';
 import type { NodeRegistry } from '@beamflow/core';
 import { DAG, deserializeWorkflow, serializeWorkflow } from '@beamflow/graph';
 import { buildIR, optimizeIR, validateIR } from '@beamflow/ir';
@@ -636,6 +639,29 @@ export async function pipelineRoutes(
             error: humanizeDbError(error)
           });
         }
+      }
+    );
+
+    /** POST /api/pipelines/upload — Upload a file (e.g., CSV) and get the absolute path on the server. */
+    appWithAuth.post(
+      '/api/pipelines/upload',
+      async (req, reply) => {
+        const data = await req.file();
+        if (!data) {
+          throw badRequest('No file uploaded');
+        }
+
+        const projectRoot = process.cwd(); // Root of the beamflow project
+        const uploadDir = path.join(projectRoot, '.beamflow', 'uploads');
+        await fs.promises.mkdir(uploadDir, { recursive: true });
+
+        const filename = `${Date.now()}-${data.filename}`;
+        const filePath = path.join(uploadDir, filename);
+
+        const pump = util.promisify(pipeline);
+        await pump(data.file, fs.createWriteStream(filePath));
+
+        return reply.send({ path: filePath });
       }
     );
   });

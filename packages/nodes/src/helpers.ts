@@ -126,6 +126,33 @@ export function textSetting(
   };
 }
 
+export function fileSetting(
+  key: string,
+  label: string,
+  opts?: {
+    description?: string;
+    required?: boolean;
+    fixed?: boolean;
+    group?: string;
+    order?: number;
+  },
+): ISettingDefinition {
+  const validation: ISettingValidation[] = [];
+  if (opts?.required) {
+    validation.push({ type: 'required', message: `${label} is required.` });
+  }
+  return {
+    key,
+    label,
+    description: opts?.description,
+    type: SettingType.File,
+    validation,
+    fixed: opts?.fixed,
+    group: opts?.group,
+    order: opts?.order,
+  };
+}
+
 export function selectSetting(
   key: string,
   label: string,

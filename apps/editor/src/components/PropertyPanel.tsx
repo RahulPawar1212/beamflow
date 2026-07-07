@@ -5,7 +5,7 @@
 
 import React from 'react';
 import { createPortal } from 'react-dom';
-import { X, Settings2, Trash2, Plus, Database } from 'lucide-react';
+import { X, Settings2, Trash2, Plus, Database, UploadCloud, Loader2 } from 'lucide-react';
 import { useWorkflowStore } from '../store/workflow-store.js';
 import { useSchemaStore } from '../lib/schema-store.js';
 import { api } from '../api/client.js';
@@ -52,8 +52,34 @@ export function PropertyPanel() {
 
   const [isConnectionModalOpen, setIsConnectionModalOpen] = React.useState(false);
 
-  const handleChange = (key: string, value: unknown) => {
+  const handleChange = async (key: string, value: unknown) => {
     updateSettings(selectedNode.id, { [key]: value });
+    
+    // Auto-detect schema for CSV Source on file change
+    if (selectedNode.data.nodeType === 'beamflow:csv-source' && key === 'filePath' && typeof value === 'string' && value.trim() !== '') {
+      try {
+        const { headers, sampleRows } = await api.previewCsv(value, (settings.delimiter as string) || ',');
+        if (headers.length > 0) {
+          const inferred = headers.map((header: string, colIndex: number) => {
+            let inferredType = 'string';
+            for (const row of sampleRows) {
+              const val = row[colIndex]?.trim() ?? '';
+              if (val !== '') {
+                if (/^(true|false|yes|no|1|0)$/i.test(val)) inferredType = 'boolean';
+                else if (/^-?\d+$/.test(val)) inferredType = 'integer';
+                else if (/^-?\d+\.\d+$/.test(val)) inferredType = 'double';
+                else if (/^\d{4}-\d{2}-\d{2}$/.test(val)) inferredType = 'date';
+                break;
+              }
+            }
+            return { name: header, type: inferredType, nullable: true };
+          });
+          updateSettings(selectedNode.id, { [key]: value, schemaColumns: inferred });
+        }
+      } catch (err) {
+        console.error('Auto schema detection failed:', err);
+      }
+    }
   };
 
   return (
@@ -385,6 +411,8 @@ interface SettingControlProps {
 }
 
 function SettingControl({ setting, value, onChange, inputColumns }: SettingControlProps) {
+  const [isUploading, setIsUploading] = React.useState(false);
+  const [uploadError, setUploadError] = React.useState<string | null>(null);
   const isFixed = setting.fixed;
 
   const baseInputClass = `w-full px-2.5 py-1.5 text-xs rounded-lg
@@ -480,6 +508,80 @@ function SettingControl({ setting, value, onChange, inputColumns }: SettingContr
             {(value as boolean) ? 'Enabled' : 'Disabled'}
           </span>
         </label>
+      )}
+
+      {/* File Upload */}
+      {setting.type === 'file' && (
+        <div className="mt-1">
+          <div className="flex gap-2 mb-2">
+            <input
+              type="text"
+              value={(value as string) || ''}
+              onChange={(e) => onChange(e.target.value)}
+              placeholder={setting.placeholder}
+              disabled={isFixed}
+              className={`${baseInputClass} flex-1 !mb-0`}
+            />
+            {(value as string) && !isFixed && (
+              <button
+                type="button"
+                onClick={() => {
+                  onChange('');
+                  setUploadError(null);
+                }}
+                className="px-2.5 py-1.5 bg-red-500/10 text-red-400 border border-red-500/20 rounded-lg hover:bg-red-500/20 transition-colors flex items-center justify-center text-xs font-semibold"
+              >
+                Clear File
+              </button>
+            )}
+          </div>
+          <div
+            className={`relative border-2 border-dashed rounded-lg p-4 flex flex-col items-center justify-center transition-colors
+              ${isUploading ? 'border-indigo-500 bg-indigo-500/5' : 'border-[var(--color-border)] hover:border-gray-500 bg-black/10'}
+            `}
+          >
+            {isUploading ? (
+              <Loader2 className="animate-spin text-indigo-400 mb-2" size={24} />
+            ) : (
+              <UploadCloud className="text-gray-500 mb-2" size={24} />
+            )}
+            <span className="text-xs text-gray-400 text-center mb-3">
+              {isUploading ? 'Uploading...' : 'Drag & drop a file here, or click Browse'}
+            </span>
+            <div className="relative">
+              <button
+                type="button"
+                disabled={isFixed || isUploading}
+                className="px-3 py-1.5 text-xs font-semibold rounded bg-[var(--color-surface-300)] text-gray-300 border border-[var(--color-border)] hover:bg-[var(--color-surface-400)] transition-colors disabled:opacity-50"
+              >
+                Browse Files
+              </button>
+              <input
+                type="file"
+                disabled={isFixed || isUploading}
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  try {
+                    setIsUploading(true);
+                    setUploadError(null);
+                    const res = await api.uploadFile(file);
+                    onChange(res.path);
+                  } catch (err: any) {
+                    setUploadError(err.message || 'Upload failed');
+                  } finally {
+                    setIsUploading(false);
+                  }
+                  e.target.value = ''; // Reset input
+                }}
+                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
+              />
+            </div>
+          </div>
+          {uploadError && (
+            <div className="text-[10px] text-red-400 mt-1">{uploadError}</div>
+          )}
+        </div>
       )}
 
       {/* Select */}

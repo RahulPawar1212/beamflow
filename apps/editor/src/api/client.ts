@@ -164,6 +164,27 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ connectionString, sqlQuery }),
     }),
+  uploadFile: async (file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    // request() helper sets Content-Type to application/json if we don't override it,
+    // but fetch automatically sets the correct multipart boundary if we omit Content-Type.
+    // However, our request() helper sets headers to {} and doesn't explicitly force JSON unless body is a string.
+    // Let's rely on standard fetch inside our request helper or bypass it if needed.
+    const token = localStorage.getItem('bf_token');
+    const res = await fetch(`${API_BASE}/pipelines/upload`, {
+      method: 'POST',
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: formData,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || err.message || `HTTP ${res.status}`);
+    }
+    return res.json() as Promise<{ path: string }>;
+  },
   testConnection: (connectionString: string) =>
     request<{ success: boolean; message?: string; error?: string }>('/pipelines/test-connection', {
       method: 'POST',

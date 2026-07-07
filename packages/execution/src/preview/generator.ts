@@ -33,7 +33,7 @@ registerOperationHandler('PreviewFeatherSink', (step, emitter, ctx) => {
   emitter.indent();
   emitter.line(`df = pd.DataFrame(element)`);
   emitter.dedent();
-  emitter.line(`feather.write_feather(df, '${filePath}')`);
+  emitter.line(`feather.write_feather(df, '${filePath}', compression='uncompressed')`);
   emitter.line(`yield element`);
   emitter.dedent();
   emitter.dedent();

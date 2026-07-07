@@ -81,6 +81,11 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<{
     allowedHeaders: ['Content-Type', 'Authorization'],
   });
 
+  const fastifyMultipart = await import('@fastify/multipart');
+  await app.register(fastifyMultipart.default, {
+    limits: { fileSize: 50 * 1024 * 1024 }, // 50MB limit
+  });
+
   // JWT Registration
   await app.register(jwt, {
     secret: process.env.JWT_SECRET || 'supersecretkey_change_me_in_production_12345!',

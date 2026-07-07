@@ -22,6 +22,7 @@
     "@beamflow/shared": "workspace:*",
     "@fastify/cors": "^11.0.0",
     "@fastify/jwt": "^9.0.1",
+    "@fastify/multipart": "^10.0.0",
     "@libsql/client": "^0.14.0",
     "@types/mssql": "^12.3.0",
     "apache-arrow": "^21.1.0",

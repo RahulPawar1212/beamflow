@@ -134,7 +134,7 @@ export function PreviewPanel() {
       </div>
 
       {/* Content Area */}
-      <div className="flex-1 overflow-auto bg-[#0a0a0a]">
+      <div className="flex-1 overflow-auto bg-[var(--color-surface-0)]">
         {error ? (
           <div className="p-6 text-red-400 flex flex-col items-center justify-center h-full">
             <AlertCircle size={32} className="mb-2 opacity-50" />
@@ -144,7 +144,7 @@ export function PreviewPanel() {
           <div className="p-6 text-red-400 flex flex-col items-center justify-center h-full">
             <AlertCircle size={32} className="mb-2 opacity-50" />
             <p className="text-sm font-semibold mb-2">Preview Generation Failed</p>
-            <pre className="text-xs bg-black/50 p-4 rounded max-w-full overflow-x-auto text-red-300/80">
+            <pre className="text-xs bg-[var(--color-surface-100)] p-4 rounded max-w-full overflow-x-auto text-red-300/80">
               {previewData?.metadata?.errorMessage || 'Unknown error'}
             </pre>
           </div>
@@ -161,9 +161,9 @@ export function PreviewPanel() {
         ) : (
           <div className="min-w-max">
             <table className="w-full text-sm text-left border-collapse">
-              <thead className="text-xs text-gray-400 bg-[#111] sticky top-0 z-10 shadow-sm border-b border-[var(--color-border)]">
+              <thead className="text-xs text-gray-400 bg-[var(--color-surface-100)] sticky top-0 z-10 shadow-sm border-b border-[var(--color-border)]">
                 <tr>
-                  <th className="px-4 py-2 font-mono text-gray-500 border-r border-[var(--color-border)] bg-black/40 w-12 text-right">#</th>
+                  <th className="px-4 py-2 font-mono text-gray-500 border-r border-[var(--color-border)] bg-black/5 dark:bg-black/40 w-12 text-right">#</th>
                   {columns.map((col) => (
                     <th key={col} className="px-4 py-2 font-medium border-r border-[var(--color-border)] max-w-xs truncate" title={col}>
                       {col}
@@ -173,8 +173,8 @@ export function PreviewPanel() {
               </thead>
               <tbody className="divide-y divide-[var(--color-border)] text-gray-300 font-mono text-xs">
                 {rows.map((row, idx) => (
-                  <tr key={idx} className="hover:bg-white/5 transition-colors">
-                    <td className="px-4 py-1.5 text-gray-500 border-r border-[var(--color-border)] bg-black/20 text-right">
+                  <tr key={idx} className="hover:bg-black/5 dark:hover:bg-white/5 transition-colors">
+                    <td className="px-4 py-1.5 text-gray-500 border-r border-[var(--color-border)] bg-black/5 dark:bg-black/20 text-right">
                       {idx + 1 + (page - 1) * 100}
                     </td>
                     {columns.map((col) => (
@@ -194,7 +194,7 @@ export function PreviewPanel() {
 
       {/* Footer / Pagination */}
       {previewData && (status === 'ready' || status === 'stale') && previewData.totalPages > 1 && (
-        <div className="px-4 py-2 flex items-center justify-between border-t border-[var(--color-border)] bg-[#111] text-xs text-gray-400">
+        <div className="px-4 py-2 flex items-center justify-between border-t border-[var(--color-border)] bg-[var(--color-surface-100)] text-xs text-gray-400">
           <div>
             Showing rows {(page - 1) * 100 + 1} to {Math.min(page * 100, (page - 1) * 100 + rows.length)}
           </div>

@@ -15,6 +15,7 @@ import { NodeCategory, IRStepType } from '@beamflow/shared';
 import {
   defineNode,
   outputPort,
+  fileSetting,
   textSetting,
   selectSetting,
   booleanSetting,
@@ -34,9 +35,8 @@ export const csvSource = defineNode({
   ],
 
   settings: [
-    textSetting('filePath', 'File Path', {
-      description: 'Path to the CSV file to read.',
-      placeholder: '/path/to/data.csv',
+    fileSetting('filePath', 'File Path', {
+      description: 'Path to the CSV file to read. Drag & Drop a file here to upload it.',
       required: true,
       group: 'Source',
       order: 1,

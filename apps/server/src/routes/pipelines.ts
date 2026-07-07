@@ -150,7 +150,7 @@ export async function pipelineRoutes(
     );
 
     /** POST /api/pipelines — Create a new pipeline. */
-    appWithAuth.post<{ Body: { name?: string; description?: string } }>(
+    appWithAuth.post<{ Body: { name?: string; description?: string; nodes?: any[]; connections?: any[] } }>(
       '/api/pipelines',
       async (req, reply) => {
         const userId = (req.user as any).id;
@@ -161,13 +161,13 @@ export async function pipelineRoutes(
           schemaVersion: SCHEMA_VERSION,
           metadata: {
             id,
-            name: (req.body as Record<string, string>)?.name || 'Untitled Pipeline',
-            description: (req.body as Record<string, string>)?.description || '',
+            name: (req.body as Record<string, any>)?.name || 'Untitled Pipeline',
+            description: (req.body as Record<string, any>)?.description || '',
             createdAt: now,
             updatedAt: now,
           },
-          nodes: [],
-          connections: [],
+          nodes: (req.body as Record<string, any>)?.nodes || [],
+          connections: (req.body as Record<string, any>)?.connections || [],
         };
 
         await storage.save(workflow, userId);

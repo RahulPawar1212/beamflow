@@ -151,6 +151,7 @@ interface WorkflowState {
   // Serialization
   toWorkflow: () => SerializedWorkflowDTO;
   saveWorkflow: () => Promise<boolean>;
+  duplicateWorkflow: () => Promise<string | null>;
   loadWorkflow: (workflow: SerializedWorkflowDTO) => void;
   clearWorkflow: () => void;
 }
@@ -615,15 +616,44 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       if (state.pipelineId) {
         await api.updatePipeline(state.pipelineId, workflow);
       } else {
-        const created = await api.createPipeline({ name: state.pipelineName });
+        const created = await api.createPipeline({ name: state.pipelineName, nodes: workflow.nodes, connections: workflow.connections });
         set({ pipelineId: created.metadata.id });
-        await api.updatePipeline(created.metadata.id, get().toWorkflow());
       }
       state.markSaved();
       return true;
     } catch (err) {
       console.error('Failed to save workflow:', err);
+      state.addToast('error', `Failed to save: ${err instanceof Error ? err.message : String(err)}`);
+      state.setSaving(false);
       return false;
+    } finally {
+      get().setSaving(false);
+    }
+  },
+
+  duplicateWorkflow: async (): Promise<string | null> => {
+    const state = get();
+    state.setSaving(true);
+    try {
+      const workflow = state.toWorkflow();
+      const newName = state.pipelineName.includes('Copy') ? state.pipelineName : `${state.pipelineName} (Copy)`;
+      const created = await api.createPipeline({ 
+        name: newName, 
+        nodes: workflow.nodes, 
+        connections: workflow.connections 
+      });
+      // Switch context to the newly created pipeline
+      set({ 
+        pipelineId: created.metadata.id, 
+        pipelineName: newName 
+      });
+      state.markSaved();
+      state.addToast('success', 'Workflow duplicated successfully');
+      return created.metadata.id;
+    } catch (err) {
+      console.error('Failed to duplicate workflow:', err);
+      state.addToast('error', `Failed to duplicate: ${err instanceof Error ? err.message : String(err)}`);
+      return null;
     } finally {
       get().setSaving(false);
     }

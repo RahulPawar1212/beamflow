@@ -270,6 +270,15 @@ export function Toolbar() {
             spinning={isSaving}
           />
 
+          <ToolbarButton 
+            icon={Copy} 
+            label="Duplicate" 
+            onClick={async () => {
+              await useWorkflowStore.getState().duplicateWorkflow();
+            }} 
+            disabled={!pipelineId || isSaving} 
+          />
+
           {/* Import/Export */}
           <ToolbarButton icon={Upload} label="Import" onClick={handleImport} />
           <ToolbarButton icon={Download} label="Export" onClick={handleExport} />
@@ -613,16 +622,49 @@ function WorkflowSwitcherModal({
                         <Clock size={12} className="opacity-70" />
                         {date}
                       </div>
+                      <button
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          try {
+                            const pData = await api.getPipeline(p.id);
+                            const newName = pData.metadata.name.includes('Copy') ? pData.metadata.name : `${pData.metadata.name} (Copy)`;
+                            const created = await api.createPipeline({
+                              name: newName,
+                              nodes: pData.nodes,
+                              connections: pData.connections
+                            });
+                            setPipelines((prev) => [
+                              {
+                                id: created.metadata.id,
+                                name: created.metadata.name,
+                                description: created.metadata.description,
+                                createdAt: created.metadata.createdAt,
+                                updatedAt: created.metadata.updatedAt,
+                                nodeCount: created.nodes.length,
+                                connectionCount: created.connections.length,
+                              },
+                              ...prev,
+                            ]);
+                            addToast('success', 'Workflow duplicated');
+                          } catch (err) {
+                            addToast('error', `Failed to duplicate: ${err instanceof Error ? err.message : err}`);
+                          }
+                        }}
+                        className="p-1.5 rounded-md text-gray-500 opacity-0 group-hover:opacity-100 hover:text-indigo-400 hover:bg-indigo-500/10 transition-all ml-2"
+                        title="Duplicate workflow"
+                      >
+                        <Copy size={16} />
+                      </button>
                       {!isCurrent ? (
                         <button
                           onClick={(e) => handleDelete(e, p.id)}
-                          className="p-1.5 rounded-md text-gray-500 opacity-0 group-hover:opacity-100 hover:text-red-400 hover:bg-red-500/10 transition-all ml-2"
+                          className="p-1.5 rounded-md text-gray-500 opacity-0 group-hover:opacity-100 hover:text-red-400 hover:bg-red-500/10 transition-all"
                           title="Delete workflow"
                         >
                           <Trash2 size={16} />
                         </button>
                       ) : (
-                        <div className="w-[36px] ml-2" /> // spacer for alignment with trash icon
+                        <div className="w-[28px]" /> // spacer for alignment with trash icon
                       )}
                     </div>
                   </div>

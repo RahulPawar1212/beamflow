@@ -82,7 +82,7 @@ export const api = {
   // Pipelines
   listPipelines: () => request<{ pipelines: PipelineSummary[] }>('/pipelines'),
   getPipeline: (id: string) => request<SerializedWorkflowDTO>(`/pipelines/${seg(id)}`),
-  createPipeline: (data: { name?: string; description?: string }) =>
+  createPipeline: (data: { name?: string; description?: string; nodes?: any[]; connections?: any[] }) =>
     request<SerializedWorkflowDTO>('/pipelines', {
       method: 'POST',
       body: JSON.stringify(data),

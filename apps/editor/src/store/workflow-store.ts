@@ -86,6 +86,7 @@ interface WorkflowState {
   generatedArtifact: GeneratedArtifact | null;
   executionLogs: string[];
   executionStatus: 'idle' | 'running' | 'success' | 'error';
+  cancelExecution: (() => void) | null;
   lastSavedAt: string | null;
   isDirty: boolean;
   toasts: Toast[];
@@ -94,6 +95,7 @@ interface WorkflowState {
   // Preview Panel State
   isPreviewPanelOpen: boolean;
   previewNodeId: string | null;
+  previewRefreshKey: number;
 
   // Actions
   toggleTheme: () => void;
@@ -116,6 +118,7 @@ interface WorkflowState {
   setExecutionLogs: (logs: string[]) => void;
   appendExecutionLog: (line: string) => void;
   setExecutionStatus: (status: WorkflowState['executionStatus']) => void;
+  setCancelExecution: (fn: (() => void) | null) => void;
   markSaved: () => void;
   updateNodeLabel: (nodeId: string, label: string) => void;
   removeNode: (nodeId: string) => void;
@@ -147,6 +150,7 @@ interface WorkflowState {
 
   // Serialization
   toWorkflow: () => SerializedWorkflowDTO;
+  saveWorkflow: () => Promise<boolean>;
   loadWorkflow: (workflow: SerializedWorkflowDTO) => void;
   clearWorkflow: () => void;
 }
@@ -172,6 +176,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   generatedArtifact: null,
   executionLogs: [],
   executionStatus: 'idle',
+  cancelExecution: null,
   lastSavedAt: null,
   isDirty: false,
   toasts: [],
@@ -179,6 +184,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
 
   isPreviewPanelOpen: false,
   previewNodeId: null,
+  previewRefreshKey: 0,
 
   // ─── Theme Actions ──────────────────────────────────────────────
 
@@ -246,7 +252,11 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
 
   // ─── Node actions ───────────────────────────────────────────────
 
-  openPreviewPanel: (nodeId) => set({ isPreviewPanelOpen: true, previewNodeId: nodeId }),
+  openPreviewPanel: (nodeId) => set((state) => ({ 
+    isPreviewPanelOpen: true, 
+    previewNodeId: nodeId,
+    previewRefreshKey: state.previewRefreshKey + 1 
+  })),
   closePreviewPanel: () => set({ isPreviewPanelOpen: false }),
 
   setSelectedNode: (id) => set({ selectedNodeId: id }),
@@ -365,6 +375,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   appendExecutionLog: (line) =>
     set({ executionLogs: [...get().executionLogs, line] }),
   setExecutionStatus: (status) => set({ executionStatus: status }),
+  setCancelExecution: (fn) => set({ cancelExecution: fn }),
   markSaved: () =>
     set({ isDirty: false, lastSavedAt: new Date().toISOString() }),
 
@@ -594,7 +605,29 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   canUndo: () => get().historyIndex >= 0,
   canRedo: () => get().historyIndex < get().history.length - 1,
 
-  // ─── Serialization ─────────────────────────────────────────────
+  // === Serialization =========================================================
+
+  saveWorkflow: async (): Promise<boolean> => {
+    const state = get();
+    state.setSaving(true);
+    try {
+      const workflow = state.toWorkflow();
+      if (state.pipelineId) {
+        await api.updatePipeline(state.pipelineId, workflow);
+      } else {
+        const created = await api.createPipeline({ name: state.pipelineName });
+        set({ pipelineId: created.metadata.id });
+        await api.updatePipeline(created.metadata.id, get().toWorkflow());
+      }
+      state.markSaved();
+      return true;
+    } catch (err) {
+      console.error('Failed to save workflow:', err);
+      return false;
+    } finally {
+      get().setSaving(false);
+    }
+  },
 
   toWorkflow: (): SerializedWorkflowDTO => {
     const state = get();
@@ -690,6 +723,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       generatedArtifact: null,
       executionLogs: [],
       executionStatus: 'idle',
+      cancelExecution: null,
       isDirty: false,
     });
     // Schema propagation: clear all schema state

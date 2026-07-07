@@ -7,13 +7,21 @@ import type { PreviewRowsResponse } from '@beamflow/shared';
 export function PreviewPanel() {
   const isPreviewPanelOpen = useWorkflowStore((s) => s.isPreviewPanelOpen);
   const previewNodeId = useWorkflowStore((s) => s.previewNodeId);
+  const previewRefreshKey = useWorkflowStore((s) => s.previewRefreshKey);
   const pipelineId = useWorkflowStore((s) => s.pipelineId);
   const closePreviewPanel = useWorkflowStore((s) => s.closePreviewPanel);
+  const previewNode = useWorkflowStore((s) => s.nodes.find(n => n.id === previewNodeId));
 
   const [previewData, setPreviewData] = useState<PreviewRowsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isExpanded, setIsExpanded] = useState(false);
   const [page, setPage] = useState(1);
+
+  // Reset data when a forced refresh happens (button clicked again)
+  useEffect(() => {
+    setPreviewData(null);
+    setError(null);
+  }, [previewRefreshKey, previewNodeId]);
 
   // Poll for preview data
   useEffect(() => {
@@ -52,6 +60,22 @@ export function PreviewPanel() {
 
     const triggerPreview = async () => {
       try {
+        if (isMounted) {
+          // Optimistically show loading state immediately
+          setPreviewData({
+            metadata: {
+              workflowId: pipelineId,
+              nodeId: previewNodeId,
+              status: 'running',
+              createdAt: new Date().toISOString()
+            } as any,
+            rows: [],
+            page: 1,
+            pageSize: 100,
+            totalPages: 1
+          });
+          setError(null);
+        }
         await api.triggerPreview(pipelineId, previewNodeId);
         // Start polling after trigger
         fetchPreview();
@@ -69,7 +93,7 @@ export function PreviewPanel() {
       isMounted = false;
       clearInterval(intervalId);
     };
-  }, [isPreviewPanelOpen, previewNodeId, pipelineId, page]);
+  }, [isPreviewPanelOpen, previewNodeId, pipelineId, page, previewRefreshKey]);
 
   if (!isPreviewPanelOpen) {
     return null;
@@ -89,16 +113,36 @@ export function PreviewPanel() {
       <div className="px-4 py-2 flex items-center justify-between border-b border-[var(--color-border)] bg-black/10">
         <div className="flex items-center gap-2">
           <Database size={16} className="text-indigo-400" />
-          <span className="font-semibold text-sm text-gray-200">Data Preview</span>
+          <span className="font-semibold text-sm text-gray-200">
+            Data Preview {previewNode && <span className="text-gray-400 font-normal">for {previewNode.data.label as string}</span>}
+          </span>
           {previewNodeId && (
-            <span className="text-xs text-gray-400 font-mono bg-black/20 px-2 py-0.5 rounded border border-white/5">
-              {previewNodeId}
+            <span className="text-xs text-gray-500 font-mono px-2 py-0.5 rounded" title="Node ID">
+              ({previewNodeId})
             </span>
           )}
           {status === 'running' && (
             <div className="flex items-center gap-1.5 ml-2 text-xs text-amber-400 bg-amber-400/10 px-2 py-0.5 rounded-full border border-amber-400/20">
               <RefreshCw size={12} className="animate-spin" />
               <span>Generating...</span>
+              <button
+                onClick={async () => {
+                  if (pipelineId && previewNodeId) {
+                    try {
+                      await api.cancelPreview(pipelineId, previewNodeId);
+                      setPreviewData(prev => prev ? {
+                        ...prev,
+                        metadata: { ...prev.metadata, status: 'failed', errorMessage: 'Cancelled by user' }
+                      } : null);
+                    } catch (err) {
+                      console.error('Failed to cancel preview', err);
+                    }
+                  }
+                }}
+                className="ml-1 px-1.5 py-0.5 hover:bg-amber-400/20 rounded border border-transparent hover:border-amber-400/30 transition-colors"
+              >
+                Cancel
+              </button>
             </div>
           )}
           {status === 'stale' && (
@@ -147,12 +191,44 @@ export function PreviewPanel() {
             <pre className="text-xs bg-[var(--color-surface-100)] p-4 rounded max-w-full overflow-x-auto text-red-300/80">
               {previewData?.metadata?.errorMessage || 'Unknown error'}
             </pre>
+            <button
+              onClick={() => {
+                setPreviewData(null);
+                api.triggerPreview(pipelineId!, previewNodeId!).catch(console.error);
+              }}
+              className="mt-4 px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 text-xs rounded transition-colors flex items-center gap-2"
+            >
+              <RefreshCw size={14} /> Retry Preview
+            </button>
           </div>
         ) : status === 'running' && rows.length === 0 ? (
           <div className="p-6 flex flex-col items-center justify-center h-full text-gray-500">
             <RefreshCw size={24} className="animate-spin mb-3 text-indigo-500/50" />
             <p className="text-sm">Executing preview sub-graph...</p>
             <p className="text-xs opacity-70 mt-1">This may take a few moments depending on data size.</p>
+            <button
+              onClick={async () => {
+                if (pipelineId && previewNodeId) {
+                  try {
+                    await api.cancelPreview(pipelineId, previewNodeId);
+                    setPreviewData(prev => prev ? {
+                      ...prev,
+                      metadata: { ...prev.metadata, status: 'failed', errorMessage: 'Cancelled by user' }
+                    } : null);
+                  } catch (err) {
+                    console.error('Failed to cancel preview', err);
+                  }
+                }
+              }}
+              className="mt-4 px-4 py-1.5 border border-amber-500/50 text-amber-500 hover:bg-amber-500/10 text-xs rounded transition-colors flex items-center gap-2"
+            >
+              <X size={14} /> Cancel Preview
+            </button>
+          </div>
+        ) : status === 'loading' ? (
+          <div className="p-6 flex flex-col items-center justify-center h-full text-gray-500">
+            <RefreshCw size={24} className="animate-spin mb-3 text-indigo-500/50" />
+            <p className="text-sm">Loading preview data...</p>
           </div>
         ) : rows.length === 0 ? (
           <div className="p-6 flex flex-col items-center justify-center h-full text-gray-500">

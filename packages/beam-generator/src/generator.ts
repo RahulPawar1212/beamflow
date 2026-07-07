@@ -104,6 +104,70 @@ const handleReadFromJSON: OperationHandler = (step, emitter, ctx) => {
   emitter.line(`${varName} = ${varName}_raw | '${step.label}_Parse' >> beam.Map(json.loads)`);
 };
 
+const handleReadFromSQL: OperationHandler = (step, emitter, ctx) => {
+  const varName = ctx.varNames.get(step.id)!;
+  let connectionString = step.params.connectionString as string || '';
+  const sqlQuery = step.params.sqlQuery as string || '';
+
+  // Use pymssql for standard SQL Server auth, but pyodbc for Windows Auth
+  if (connectionString.startsWith('mssql://') || connectionString.startsWith('sqlserver://')) {
+    try {
+      const url = new URL(connectionString.replace(/^sqlserver:\/\//i, 'mssql://'));
+      const isWindowsAuth = url.searchParams.get('integratedSecurity') === 'true';
+      
+      if (isWindowsAuth) {
+        const serverName = url.hostname;
+        // Omit port if it's the default 1433 so PyODBC can use SQL Browser / Named Pipes fallback
+        const portName = (url.port && url.port !== '1433') ? `,${url.port}` : '';
+        const dbName = url.pathname.replace(/^\//, '');
+        const odbcString = `Driver={ODBC Driver 18 for SQL Server};Server=${serverName}${portName};Database=${dbName};Trusted_Connection=yes;Encrypt=no;TrustServerCertificate=yes;`;
+        connectionString = `mssql+pyodbc:///?odbc_connect=${encodeURIComponent(odbcString)}`;
+      } else {
+        url.protocol = 'mssql+pymssql:';
+        connectionString = url.toString();
+      }
+    } catch (e) {
+      // Fallback
+      connectionString = connectionString
+        .replace(/^mssql:\/\//i, 'mssql+pymssql://')
+        .replace(/^sqlserver:\/\//i, 'mssql+pymssql://');
+    }
+  }
+
+  emitter.addImport('apache_beam as beam');
+  emitter.addImport('sqlalchemy');
+
+  emitter.blank();
+  emitter.comment(`Read SQL: ${step.label}`);
+  emitter.line(`class ExecuteSQL_${toPythonVar(step.id)}(beam.DoFn):`);
+  emitter.indent();
+  emitter.line(`def __init__(self, conn_str):`);
+  emitter.indent();
+  emitter.line(`self.conn_str = conn_str`);
+  emitter.dedent();
+  emitter.blank();
+  emitter.line(`def process(self, query):`);
+  emitter.indent();
+  emitter.line(`engine = sqlalchemy.create_engine(self.conn_str)`);
+  emitter.line(`with engine.connect() as conn:`);
+  emitter.indent();
+  emitter.line(`result = conn.execute(sqlalchemy.text(query))`);
+  emitter.line(`keys = list(result.keys())`);
+  emitter.line(`for row in result:`);
+  emitter.indent();
+  emitter.line(`yield dict(zip(keys, row))`);
+  emitter.dedent();
+  emitter.dedent();
+  emitter.dedent();
+  emitter.dedent();
+  emitter.blank();
+
+  emitter.line(`${varName} = p | '${step.label}_Query' >> beam.Create(['${toPythonString(sqlQuery)}']) \\`);
+  emitter.indent();
+  emitter.line(`| '${step.label}_Execute' >> beam.ParDo(ExecuteSQL_${toPythonVar(step.id)}('${toPythonString(connectionString)}'))`);
+  emitter.dedent();
+};
+
 const handleFilter: OperationHandler = (step, emitter, ctx) => {
   const varName = ctx.varNames.get(step.id)!;
   const inputVar = getInputVar(step, ctx);
@@ -271,6 +335,7 @@ const handleFlatMapExpr: OperationHandler = (step, emitter, ctx) => {
 // ─── Handler Registry ───────────────────────────────────────────────────────
 
 const operationHandlers = new Map<string, OperationHandler>([
+  ['ReadFromSQL', handleReadFromSQL],
   ['ReadFromCSV', handleReadFromCSV],
   ['ReadFromJSON', handleReadFromJSON],
   ['Filter', handleFilter],
@@ -424,11 +489,37 @@ export function generatePythonBeam(pipeline: IRPipeline): GeneratedPipeline {
 
   const code = emitter.build();
 
+  const requirements = ['apache-beam'];
+  const sqlSteps = pipeline.steps.filter(s => s.operation === 'ReadFromSQL');
+  if (sqlSteps.length > 0) {
+    requirements.push('sqlalchemy');
+    // If any step uses postgresql, add psycopg2
+    if (sqlSteps.some(s => {
+      const connStr = s.params.connectionString as string || '';
+      return connStr.startsWith('postgres');
+    })) {
+      requirements.push('psycopg2-binary');
+    }
+    // If any step uses mssql, add pymssql or pyodbc
+    if (sqlSteps.some(s => {
+      const connStr = s.params.connectionString as string || '';
+      return (connStr.startsWith('mssql') || connStr.startsWith('sqlserver')) && !connStr.includes('integratedSecurity=true');
+    })) {
+      requirements.push('pymssql');
+    }
+    if (sqlSteps.some(s => {
+      const connStr = s.params.connectionString as string || '';
+      return (connStr.startsWith('mssql') || connStr.startsWith('sqlserver')) && connStr.includes('integratedSecurity=true');
+    })) {
+      requirements.push('pyodbc');
+    }
+  }
+
   return {
     code,
     filename: `${toPythonVar(pipeline.id)}_pipeline.py`,
     language: 'python',
-    requirements: ['apache-beam'],
+    requirements,
     irPipeline: pipeline,
   };
 }

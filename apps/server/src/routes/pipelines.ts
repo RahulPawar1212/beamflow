@@ -186,12 +186,9 @@ export async function pipelineRoutes(
         }
 
         const workflow = req.body as SerializedWorkflow;
-        
-        // Invalidate downstream previews for any nodes that changed
-        // In a real implementation we would diff the DAG, but for now we'll
-        // assume the UI tells us which node changed, or we invalidate everything if unsure.
-        // For MVP, since we just save the whole workflow, we can invalidate all nodes' previews
-        // just to be safe, or leave it to the UI to explicitly trigger a refresh.
+        // Invalidate all previews since we don't have diffing yet
+        const nodeIds = workflow.nodes.map(n => n.id);
+        await previewCache.invalidatePreviews(req.params.id, nodeIds);
 
         // Ensure ID consistency
         const toSave: SerializedWorkflow = {
@@ -238,6 +235,15 @@ export async function pipelineRoutes(
         previewManager.triggerPreview(workflow, req.params.nodeId, 1000).catch(console.error);
 
         return reply.status(202).send({ message: 'Preview generation started.' });
+      }
+    );
+
+    /** DELETE /api/pipelines/:id/nodes/:nodeId/preview — Cancel a running preview */
+    appWithAuth.delete<{ Params: { id: string; nodeId: string } }>(
+      '/api/pipelines/:id/nodes/:nodeId/preview',
+      async (req, reply) => {
+        previewManager.cancelPreview(req.params.id, req.params.nodeId);
+        return reply.status(204).send();
       }
     );
 
@@ -338,8 +344,15 @@ export async function pipelineRoutes(
           const optimizedIR = optimizeIR(ir);
           const generated = generatePythonBeam(optimizedIR);
 
+          const controller = new AbortController();
+          req.raw.on('close', () => {
+            if (req.raw.destroyed || req.raw.aborted) {
+              controller.abort();
+            }
+          });
+
           // Execute
-          const result = await executePipeline(generated);
+          const result = await executePipeline(generated, { signal: controller.signal });
 
           // Cache result
           executionResults.set(result.id, result);

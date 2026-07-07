@@ -7,6 +7,8 @@ import type { PreviewCacheManager } from './cache.js';
 import type { PreviewStorage } from './storage.js';
 
 export class PreviewManager {
+  private controllers = new Map<string, AbortController>();
+
   constructor(
     private readonly cache: PreviewCacheManager,
     private readonly storage: PreviewStorage,
@@ -19,7 +21,14 @@ export class PreviewManager {
    */
   async triggerPreview(workflow: SerializedWorkflow, nodeId: string, limit: number = 1000): Promise<void> {
     const workflowId = workflow.metadata.id;
+    const taskKey = `${workflowId}:${nodeId}`;
+
+    // Cancel any existing preview for this node
+    this.cancelPreview(workflowId, nodeId);
     
+    const controller = new AbortController();
+    this.controllers.set(taskKey, controller);
+
     // Set status to running immediately
     await this.cache.updateMetadata(workflowId, nodeId, {
       workflowId,
@@ -42,29 +51,64 @@ export class PreviewManager {
       // 4. Execute the pipeline
       const config: ExecutionConfig = {
         // Use a temp dir for execution, but feather is written to workspace
-        timeoutMs: 120_000 // 2 minutes for preview
+        timeoutMs: 300_000, // 5 minutes for preview (allows pip install to finish)
+        signal: controller.signal
       };
 
       const result = await executePipeline(pipeline, config);
 
+      // Only process result if it wasn't superseded by another preview run
+      if (this.controllers.get(taskKey) !== controller) return;
+      this.controllers.delete(taskKey);
+
       if (result.status === 'completed') {
-        // On success, we don't know row count unless we read it. The cache manager can read it on demand or we can just leave it 0 until loaded.
-        // Actually, for a better UX, we could read it right now to update rowCount.
         await this.cache.updateMetadata(workflowId, nodeId, {
+          workflowId,
+          nodeId,
           status: 'ready',
-          filePath: featherPath
+          filePath: featherPath,
+          createdAt: new Date().toISOString()
+        });
+      } else if (result.status === 'cancelled') {
+        await this.cache.updateMetadata(workflowId, nodeId, {
+          workflowId,
+          nodeId,
+          status: 'failed',
+          errorMessage: 'Preview cancelled by user',
+          createdAt: new Date().toISOString()
         });
       } else {
         await this.cache.updateMetadata(workflowId, nodeId, {
+          workflowId,
+          nodeId,
           status: 'failed',
-          errorMessage: result.errors.join('\n') || 'Execution failed'
+          errorMessage: result.errors.join('\n') || 'Unknown execution error',
+          createdAt: new Date().toISOString()
         });
       }
     } catch (err: any) {
+      if (this.controllers.get(taskKey) !== controller) return;
+      this.controllers.delete(taskKey);
+
       await this.cache.updateMetadata(workflowId, nodeId, {
+        workflowId,
+        nodeId,
         status: 'failed',
-        errorMessage: err.message
+        errorMessage: err.message || String(err),
+        createdAt: new Date().toISOString()
       });
+    }
+  }
+
+  /**
+   * Cancels a running preview.
+   */
+  cancelPreview(workflowId: string, nodeId: string): void {
+    const taskKey = `${workflowId}:${nodeId}`;
+    const controller = this.controllers.get(taskKey);
+    if (controller) {
+      controller.abort();
+      this.controllers.delete(taskKey);
     }
   }
 }

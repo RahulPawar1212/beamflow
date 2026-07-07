@@ -34,6 +34,8 @@ export interface ExecutionConfig {
   readonly timeoutMs?: number;
   /** Extra environment variables. */
   readonly env?: Record<string, string>;
+  /** AbortSignal to cancel execution. */
+  readonly signal?: AbortSignal;
 }
 
 /** Callback for receiving execution log lines in real time. */
@@ -68,6 +70,44 @@ export class ExecutionHandle {
   }
 }
 
+class Mutex {
+  private _promise: Promise<void> | null = null;
+  async lock(): Promise<() => void> {
+    while (this._promise) {
+      await this._promise;
+    }
+    let resolveFn!: () => void;
+    this._promise = new Promise(r => { resolveFn = r; });
+    return () => {
+      this._promise = null;
+      resolveFn();
+    };
+  }
+}
+
+const envMutex = new Mutex();
+
+import { stat } from 'node:fs/promises';
+import { platform } from 'node:os';
+
+const SHARED_VENV_DIR = join(tmpdir(), 'beamflow', 'shared_venv');
+
+async function ensureVirtualEnv(basePythonPath: string, onLog?: ExecutionLogCallback): Promise<string> {
+  const isWindows = platform() === 'win32';
+  const venvPythonPath = join(SHARED_VENV_DIR, isWindows ? 'Scripts' : 'bin', isWindows ? 'python.exe' : 'python');
+
+  try {
+    await stat(venvPythonPath);
+    return venvPythonPath;
+  } catch {
+    onLog?.('[BeamFlow] Creating persistent virtual environment for pipeline runs...', 'stdout');
+    await runProcess(basePythonPath, ['-m', 'venv', `"${SHARED_VENV_DIR}"`], tmpdir(), 300_000, (line, stream) => {
+      onLog?.(`[VENV] ${line}`, stream);
+    });
+    return venvPythonPath;
+  }
+}
+
 /**
  * Execute a generated pipeline locally.
  *
@@ -82,7 +122,7 @@ export async function executePipeline(
   onLog?: ExecutionLogCallback,
 ): Promise<ExecutionResult> {
   const executionId = `exec_${nanoid(10)}`;
-  const pythonPath = config.pythonPath || 'python';
+  const basePythonPath = config.pythonPath || 'python';
   const timeoutMs = config.timeoutMs || 300_000;
 
   // Create temp working directory
@@ -95,40 +135,55 @@ export async function executePipeline(
   handle.status = ExecutionStatus.Running;
 
   try {
-    // Write pipeline code
-    const pipelinePath = join(workDir, pipeline.filename);
-    await writeFile(pipelinePath, pipeline.code, 'utf-8');
-
-    // Write requirements.txt
-    if (pipeline.requirements.length > 0) {
-      const requirementsPath = join(workDir, 'requirements.txt');
-      await writeFile(
-        requirementsPath,
-        pipeline.requirements.join('\n') + '\n',
-        'utf-8',
-      );
-
-      // Install dependencies
-      if (config.installDeps !== false) {
-        handle.logs.push('[BeamFlow] Installing dependencies...');
-        onLog?.('[BeamFlow] Installing dependencies...', 'stdout');
-
-        await runProcess(
-          pythonPath,
-          ['-m', 'pip', 'install', '-r', 'requirements.txt', '--quiet'],
-          workDir,
-          timeoutMs,
-          (line, stream) => {
-            if (stream === 'stderr') {
-              handle.errors.push(line);
-            } else {
-              handle.logs.push(line);
-            }
-            onLog?.(line, stream);
-          },
-          config.env,
-        );
+    let pythonPath = basePythonPath;
+    
+    // Acquire lock for environment setup
+    const unlock = await envMutex.lock();
+    try {
+      try {
+        pythonPath = await ensureVirtualEnv(basePythonPath, onLog);
+      } catch (err) {
+        onLog?.('[BeamFlow] Failed to create or use virtual environment, falling back to global Python.', 'stderr');
       }
+
+      // Write pipeline code
+      const pipelinePath = join(workDir, pipeline.filename);
+      await writeFile(pipelinePath, pipeline.code, 'utf-8');
+
+      // Write requirements.txt
+      if (pipeline.requirements.length > 0) {
+        const requirementsPath = join(workDir, 'requirements.txt');
+        await writeFile(
+          requirementsPath,
+          pipeline.requirements.join('\n') + '\n',
+          'utf-8',
+        );
+
+        // Install dependencies
+        if (config.installDeps !== false) {
+          handle.logs.push('[BeamFlow] Checking/installing dependencies...');
+          onLog?.('[BeamFlow] Checking/installing dependencies...', 'stdout');
+
+          await runProcess(
+            pythonPath,
+            ['-m', 'pip', 'install', '-r', 'requirements.txt', '--quiet', '--disable-pip-version-check'],
+            workDir,
+            timeoutMs,
+            (line, stream) => {
+              if (stream === 'stderr') {
+                handle.errors.push(line);
+              } else {
+                handle.logs.push(line);
+              }
+              onLog?.(line, stream);
+            },
+            config.env,
+            config.signal,
+          );
+        }
+      }
+    } finally {
+      unlock();
     }
 
     // Execute pipeline
@@ -149,6 +204,7 @@ export async function executePipeline(
         onLog?.(line, stream);
       },
       config.env,
+      config.signal,
     );
 
     handle.exitCode = exitCode;
@@ -161,20 +217,28 @@ export async function executePipeline(
       'stdout',
     );
   } catch (error) {
-    handle.status = ExecutionStatus.Failed;
-    const message =
-      error instanceof Error ? error.message : String(error);
-    handle.errors.push(`[BeamFlow] Execution error: ${message}`);
-    onLog?.(`[BeamFlow] Execution error: ${message}`, 'stderr');
+    if (error instanceof Error && error.name === 'AbortError') {
+      handle.status = ExecutionStatus.Cancelled;
+      handle.logs.push('[BeamFlow] Execution cancelled by user');
+      onLog?.('[BeamFlow] Execution cancelled by user', 'stdout');
+    } else {
+      handle.status = ExecutionStatus.Failed;
+      const message =
+        error instanceof Error ? error.message : String(error);
+      handle.errors.push(`[BeamFlow] Execution error: ${message}`);
+      onLog?.(`[BeamFlow] Execution error: ${message}`, 'stderr');
+    }
   } finally {
     handle.completedAt = new Date().toISOString();
+    // In production we would clean up the workDir here
+    // await rm(workDir, { recursive: true, force: true }).catch(() => {});
   }
 
   return handle.toResult();
 }
 
 /**
- * Spawn a child process and stream its output.
+ * Internal helper to run a process and capture output.
  *
  * @returns Exit code of the process.
  */
@@ -185,15 +249,36 @@ function runProcess(
   timeoutMs: number,
   onLine: (line: string, stream: 'stdout' | 'stderr') => void,
   env?: Record<string, string>,
+  signal?: AbortSignal,
 ): Promise<number> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      const err = new Error('Aborted');
+      err.name = 'AbortError';
+      return reject(err);
+    }
+
     const child = spawn(command, args, {
       cwd,
       env: { ...process.env, ...env },
       shell: true,
     });
 
-    const timeout = setTimeout(() => {
+    let timeout: NodeJS.Timeout | undefined;
+
+    const onAbort = () => {
+      child.kill('SIGTERM');
+      const err = new Error('Aborted');
+      err.name = 'AbortError';
+      reject(err);
+    };
+
+    if (signal) {
+      signal.addEventListener('abort', onAbort);
+    }
+
+    timeout = setTimeout(() => {
+      if (signal) signal.removeEventListener('abort', onAbort);
       child.kill('SIGTERM');
       reject(new Error(`Process timed out after ${timeoutMs}ms`));
     }, timeoutMs);
@@ -213,12 +298,14 @@ function runProcess(
     });
 
     child.on('close', (code) => {
-      clearTimeout(timeout);
+      if (timeout) clearTimeout(timeout);
+      if (signal) signal.removeEventListener('abort', onAbort);
       resolve(code ?? 1);
     });
 
     child.on('error', (err) => {
-      clearTimeout(timeout);
+      if (timeout) clearTimeout(timeout);
+      if (signal) signal.removeEventListener('abort', onAbort);
       reject(err);
     });
   });

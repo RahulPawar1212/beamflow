@@ -118,7 +118,19 @@ export function PropertyPanel() {
             hover:border-[var(--color-border)] focus:border-indigo-500/50 transition-colors"
         />
         <button
-          onClick={() => {
+          onClick={async () => {
+            const state = useWorkflowStore.getState();
+            const wasDirty = state.isDirty;
+            if (wasDirty || !state.pipelineId) {
+              await state.saveWorkflow();
+            }
+            
+            const currentId = useWorkflowStore.getState().pipelineId;
+            if (currentId) {
+              // Since the user specifically clicked "Preview Data", we'll auto-trigger a fresh run
+              // regardless of whether the node was dirty or not, so they can recover from past failures.
+              await api.triggerPreview(currentId, selectedNode.id).catch(console.error);
+            }
             useWorkflowStore.getState().openPreviewPanel(selectedNode.id);
           }}
           className="mt-3 w-full py-1.5 px-3 rounded-md bg-indigo-500/10 text-indigo-400 

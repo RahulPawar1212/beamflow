@@ -52,29 +52,15 @@ export function Toolbar() {
 
   const [showCode, setShowCode] = useState(false);
   const [showSwitcher, setShowSwitcher] = useState(false);
+  const saveWorkflow = useWorkflowStore((s) => s.saveWorkflow);
 
   // ─── Save ─────────────────────────────────────────────────────────
 
   const handleSave = async (silent = false): Promise<boolean> => {
-    setSaving(true);
-    try {
-      const workflow = toWorkflow();
-      if (pipelineId) {
-        await api.updatePipeline(pipelineId, workflow);
-      } else {
-        const created = await api.createPipeline({ name: pipelineName });
-        setPipelineId(created.metadata.id);
-        await api.updatePipeline(created.metadata.id, toWorkflow());
-      }
-      markSaved();
-      if (!silent) addToast('success', 'Pipeline saved');
-      return true;
-    } catch (err) {
-      addToast('error', `Save failed: ${err instanceof Error ? err.message : err}`);
-      return false;
-    } finally {
-      setSaving(false);
-    }
+    const ok = await saveWorkflow();
+    if (ok && !silent) addToast('success', 'Pipeline saved');
+    if (!ok && !silent) addToast('error', 'Failed to save pipeline');
+    return ok;
   };
 
   // ─── Generate ─────────────────────────────────────────────────────
@@ -84,7 +70,7 @@ export function Toolbar() {
       addToast('info', 'Add at least one node before generating code');
       return;
     }
-    if (!pipelineId) {
+    if (!pipelineId || isDirty) {
       const ok = await handleSave(true);
       if (!ok) return;
     }
@@ -117,12 +103,15 @@ export function Toolbar() {
       addToast('info', 'Add at least one node before running');
       return;
     }
-    if (!pipelineId) {
+    if (!pipelineId || isDirty) {
       const ok = await handleSave(true);
       if (!ok) return;
     }
     const id = useWorkflowStore.getState().pipelineId;
     if (!id) return;
+
+    const controller = new AbortController();
+    useWorkflowStore.getState().setCancelExecution(() => controller.abort());
 
     setExecuting(true);
     setExecutionStatus('running');
@@ -130,17 +119,24 @@ export function Toolbar() {
     try {
       await api.updatePipeline(id, toWorkflow());
       markSaved();
-      const result = await api.executePipeline(id);
+      const result = await api.executePipeline(id, { signal: controller.signal });
       const logs = [...result.logs, ...result.errors];
       setExecutionLogs(logs.length ? logs : ['Pipeline finished with no output.']);
       const ok = result.status === 'success' || result.exitCode === 0;
       setExecutionStatus(ok ? 'success' : 'error');
       addToast(ok ? 'success' : 'error', ok ? 'Pipeline ran successfully' : 'Pipeline finished with errors');
-    } catch (err) {
-      setExecutionLogs([`Execution failed: ${err instanceof Error ? err.message : err}`]);
-      setExecutionStatus('error');
-      addToast('error', 'Execution failed');
+    } catch (err: any) {
+      if (err.name === 'AbortError' || err.message === 'Aborted') {
+        setExecutionLogs(['Pipeline execution cancelled by user.']);
+        setExecutionStatus('error');
+        addToast('info', 'Execution cancelled');
+      } else {
+        setExecutionLogs([`Execution failed: ${err instanceof Error ? err.message : err}`]);
+        setExecutionStatus('error');
+        addToast('error', 'Execution failed');
+      }
     } finally {
+      useWorkflowStore.getState().setCancelExecution(null);
       setExecuting(false);
     }
   };
@@ -322,15 +318,23 @@ export function Toolbar() {
           />
 
           {/* Execute */}
-          <ToolbarButton
-            icon={isExecuting ? Loader2 : Play}
-            label="Run"
-            onClick={handleExecute}
-            disabled={isExecuting}
-            spinning={isExecuting}
-            accent
-            variant="success"
-          />
+          {isExecuting ? (
+            <ToolbarButton
+              icon={X}
+              label="Cancel Run"
+              onClick={() => useWorkflowStore.getState().cancelExecution?.()}
+              accent
+              variant="danger"
+            />
+          ) : (
+            <ToolbarButton
+              icon={Play}
+              label="Run"
+              onClick={handleExecute}
+              accent
+              variant="success"
+            />
+          )}
         </div>
       </div>
 
@@ -639,6 +643,7 @@ function ExecutionPanel() {
   const status = useWorkflowStore((s) => s.executionStatus);
   const setExecutionLogs = useWorkflowStore((s) => s.setExecutionLogs);
   const setExecutionStatus = useWorkflowStore((s) => s.setExecutionStatus);
+  const cancelExecution = useWorkflowStore((s) => s.cancelExecution);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom on new logs
@@ -652,7 +657,7 @@ function ExecutionPanel() {
 
   const statusMeta =
     status === 'running'
-      ? { label: 'Running…', color: 'text-indigo-400', icon: Loader2, spin: true }
+      ? { label: 'Running...', color: 'text-indigo-400', icon: Loader2, spin: true }
       : status === 'success'
         ? { label: 'Success', color: 'text-emerald-400', icon: CheckCircle2, spin: false }
         : status === 'error'
@@ -715,7 +720,7 @@ interface ToolbarButtonProps {
   disabled?: boolean;
   spinning?: boolean;
   accent?: boolean;
-  variant?: 'default' | 'success';
+  variant?: 'default' | 'success' | 'danger';
 }
 
 function ToolbarButton({
@@ -731,7 +736,9 @@ function ToolbarButton({
   const colors = accent
     ? variant === 'success'
       ? 'bg-gradient-to-b from-emerald-500 to-emerald-600 text-white shadow-sm shadow-emerald-500/25 hover:from-emerald-400 hover:to-emerald-500 hover:shadow-md hover:shadow-emerald-500/30 font-medium'
-      : 'bg-gradient-to-b from-indigo-500 to-indigo-600 text-white shadow-sm shadow-indigo-500/25 hover:from-indigo-400 hover:to-indigo-500 hover:shadow-md hover:shadow-indigo-500/30 font-medium'
+      : variant === 'danger'
+        ? 'bg-gradient-to-b from-amber-500 to-amber-600 text-white shadow-sm shadow-amber-500/25 hover:from-amber-400 hover:to-amber-500 hover:shadow-md hover:shadow-amber-500/30 font-medium'
+        : 'bg-gradient-to-b from-indigo-500 to-indigo-600 text-white shadow-sm shadow-indigo-500/25 hover:from-indigo-400 hover:to-indigo-500 hover:shadow-md hover:shadow-indigo-500/30 font-medium'
     : 'text-gray-500 hover:text-gray-300 hover:bg-[var(--color-surface-200)]';
 
   return (

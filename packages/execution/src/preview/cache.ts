@@ -52,12 +52,24 @@ export class PreviewCacheManager {
 
     const rows: Record<string, any>[] = [];
     
-    // table.toArray() or manual iteration
     // using manual slice to avoid loading all into plain objects if large
     for (let i = startIdx; i < endIdx; i++) {
       const row = table.get(i);
       if (row) {
-        rows.push(row.toJSON());
+        const obj = row.toJSON();
+        // apache-arrow converts INT64 to BigInt, which JSON.stringify cannot handle.
+        // Convert BigInts to regular JS numbers (or strings if unsafe)
+        for (const key of Object.keys(obj)) {
+          if (typeof obj[key] === 'bigint') {
+            const val = obj[key] as bigint;
+            if (val > Number.MAX_SAFE_INTEGER || val < Number.MIN_SAFE_INTEGER) {
+              obj[key] = val.toString();
+            } else {
+              obj[key] = Number(val);
+            }
+          }
+        }
+        rows.push(obj);
       }
     }
 

@@ -111,6 +111,10 @@ export const api = {
     request<{ message: string }>(`/pipelines/${seg(pipelineId)}/nodes/${seg(nodeId)}/preview`, {
       method: 'POST',
     }),
+  cancelPreview: (pipelineId: string, nodeId: string) =>
+    request<void>(`/pipelines/${seg(pipelineId)}/nodes/${seg(nodeId)}/preview`, {
+      method: 'DELETE',
+    }),
   getPreview: (pipelineId: string, nodeId: string, page?: number, pageSize?: number) => {
     const params = new URLSearchParams();
     if (page) params.set('page', page.toString());
@@ -150,8 +154,8 @@ export const api = {
   // Generation & Execution
   generateCode: (id: string) =>
     request<GeneratedCodeDTO>(`/pipelines/${seg(id)}/generate`, { method: 'POST' }),
-  executePipeline: (id: string) =>
-    request<ExecutionResultDTO>(`/pipelines/${seg(id)}/execute`, { method: 'POST' }),
+  executePipeline: (id: string, options?: RequestInit) =>
+    request<ExecutionResultDTO>(`/pipelines/${seg(id)}/execute`, { method: 'POST', ...options }),
   getExecution: (pipelineId: string, execId: string) =>
     request<ExecutionResultDTO>(`/pipelines/${seg(pipelineId)}/executions/${seg(execId)}`),
   previewCsv: (filePath: string, delimiter = ',') =>

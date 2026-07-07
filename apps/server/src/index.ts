@@ -45,3 +45,9 @@ main().catch((err) => {
   console.error('[BeamFlow] Fatal startup error:', err);
   process.exit(1);
 });
+
+// Trigger server restart
+
+// Trigger server restart for mutex fix
+
+// Trigger server restart for BigInt fix

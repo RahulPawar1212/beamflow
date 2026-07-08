@@ -265,6 +265,19 @@ export interface IWorkflowMetadata {
   readonly isSubflow?: boolean;
   /** Exposed parameters from internal nodes when used as a subflow. */
   readonly parameters?: ReadonlyArray<ISubflowParameter>;
+  /** The project this workflow/subflow belongs to. */
+  readonly projectId?: string;
+}
+
+/** A project groups a user's workflows and subflows. */
+export interface IProject {
+  readonly id: string;
+  readonly name: string;
+  readonly description?: string;
+  /** Owning user id. */
+  readonly ownerId: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
 }
 
 /** Definition of a parameter exposed from a subflow's internal node. */

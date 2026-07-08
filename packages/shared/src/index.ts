@@ -24,6 +24,7 @@ export {
   type InlineIRStep,
   type IConnection,
   type IWorkflowMetadata,
+  type IProject,
   type IWorkflow,
   type IRStepDefinition,
   type ValidationIssue,

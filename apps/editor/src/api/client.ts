@@ -90,10 +90,22 @@ export const api = {
       body: JSON.stringify(data),
     }),
 
+  // Projects
+  listProjects: () => request<{ projects: ProjectDTO[] }>('/projects'),
+  createProject: (data: { name: string; description?: string }) =>
+    request<ProjectDTO>('/projects', { method: 'POST', body: JSON.stringify(data) }),
+  updateProject: (id: string, data: { name?: string; description?: string }) =>
+    request<ProjectDTO>(`/projects/${seg(id)}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteProject: (id: string) =>
+    request<void>(`/projects/${seg(id)}`, { method: 'DELETE' }),
+
   // Pipelines
-  listPipelines: () => request<{ pipelines: PipelineSummary[] }>('/pipelines'),
+  listPipelines: (projectId?: string) => {
+    const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : '';
+    return request<{ pipelines: PipelineSummary[] }>(`/pipelines${query}`);
+  },
   getPipeline: (id: string) => request<SerializedWorkflowDTO>(`/pipelines/${seg(id)}`, { cache: 'no-store' }),
-  createPipeline: (data: { name?: string; description?: string; isSubflow?: boolean; parameters?: any[]; nodes?: any[]; connections?: any[] }) =>
+  createPipeline: (data: { name?: string; description?: string; isSubflow?: boolean; parameters?: any[]; projectId?: string; nodes?: any[]; connections?: any[] }) =>
     request<SerializedWorkflowDTO>('/pipelines', {
       method: 'POST',
       body: JSON.stringify(data),
@@ -311,12 +323,23 @@ export interface CompileConnection {
   targetPortId: string;
 }
 
+/** A project row from `GET /api/projects`. */
+export interface ProjectDTO {
+  id: string;
+  name: string;
+  description?: string;
+  ownerId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 /** Summary row from `GET /api/pipelines`. */
 export interface PipelineSummary {
   id: string;
   name: string;
   description?: string;
   isSubflow?: boolean;
+  projectId?: string;
   createdAt: string;
   updatedAt: string;
   nodeCount: number;
@@ -336,6 +359,7 @@ export interface SerializedWorkflowDTO {
     name: string;
     description?: string;
     isSubflow?: boolean;
+    projectId?: string;
     createdAt: string;
     updatedAt: string;
     parameters?: any[];

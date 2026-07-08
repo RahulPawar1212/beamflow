@@ -14,11 +14,24 @@ export const sqliteUsers = sqliteTable('users', {
   createdAt: text('created_at').notNull(),
 });
 
+export const sqliteProjects = sqliteTable('projects', {
+  id: text('id').primaryKey(),
+  ownerId: text('owner_id')
+    .notNull()
+    .references(() => sqliteUsers.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  description: text('description').notNull().default(''),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+});
+
 export const sqliteWorkflows = sqliteTable('workflows', {
   id: text('id').primaryKey(),
   ownerId: text('owner_id')
     .notNull()
     .references(() => sqliteUsers.id, { onDelete: 'cascade' }),
+  // Nullable: existing rows are backfilled to a Default project on startup.
+  projectId: text('project_id').references(() => sqliteProjects.id, { onDelete: 'cascade' }),
   name: text('name').notNull(),
   description: text('description').notNull().default(''),
   settingsJson: text('settings_json').notNull(), // Serialized JSON string
@@ -62,11 +75,24 @@ export const pgUsers = pgTable('users', {
   createdAt: pgText('created_at').notNull(),
 });
 
+export const pgProjects = pgTable('projects', {
+  id: pgText('id').primaryKey(),
+  ownerId: pgText('owner_id')
+    .notNull()
+    .references(() => pgUsers.id, { onDelete: 'cascade' }),
+  name: pgText('name').notNull(),
+  description: pgText('description').notNull().default(''),
+  createdAt: pgText('created_at').notNull(),
+  updatedAt: pgText('updated_at').notNull(),
+});
+
 export const pgWorkflows = pgTable('workflows', {
   id: pgText('id').primaryKey(),
   ownerId: pgText('owner_id')
     .notNull()
     .references(() => pgUsers.id, { onDelete: 'cascade' }),
+  // Nullable: existing rows are backfilled to a Default project on startup.
+  projectId: pgText('project_id').references(() => pgProjects.id, { onDelete: 'cascade' }),
   name: pgText('name').notNull(),
   description: pgText('description').notNull().default(''),
   settingsJson: pgText('settings_json').notNull(), // Serialized JSON string

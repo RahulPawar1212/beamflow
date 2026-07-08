@@ -17,6 +17,7 @@ import { executePipeline, LocalFeatherStorage, PreviewCacheManager, PreviewManag
 import { generateId, timestamp, SCHEMA_VERSION } from '@beamflow/shared';
 import type { SerializedWorkflow, PreviewRowsResponse } from '@beamflow/shared';
 import type { IStorage } from '../storage.js';
+import { projectsRepo } from '../db/repositories/projects.repo.js';
 import { notFound, badRequest, ApiError } from '../errors.js';
 
 /**
@@ -121,15 +122,17 @@ export async function pipelineRoutes(
     // ─── CRUD ─────────────────────────────────────────────────────────
 
     /** GET /api/pipelines — List all saved pipelines. */
-    appWithAuth.get<{ Querystring: { includeSubflows?: string } }>('/api/pipelines', async (req, reply) => {
+    appWithAuth.get<{ Querystring: { includeSubflows?: string; projectId?: string } }>('/api/pipelines', async (req, reply) => {
       const userId = (req.user as any).id;
       const includeSubflows = req.query.includeSubflows === 'true';
-      const workflows = await storage.list(userId, { includeSubflows });
+      const projectId = req.query.projectId || undefined;
+      const workflows = await storage.list(userId, { includeSubflows, projectId });
       const summaries = workflows.map((w) => ({
         id: w.metadata.id,
         name: w.metadata.name,
         description: w.metadata.description,
         isSubflow: w.metadata.isSubflow,
+        projectId: w.metadata.projectId,
         createdAt: w.metadata.createdAt,
         updatedAt: w.metadata.updatedAt,
         nodeCount: w.nodes.length,
@@ -152,12 +155,19 @@ export async function pipelineRoutes(
     );
 
     /** POST /api/pipelines — Create a new pipeline. */
-    appWithAuth.post<{ Body: { name?: string; description?: string; isSubflow?: boolean; parameters?: any[]; nodes?: any[]; connections?: any[] } }>(
+    appWithAuth.post<{ Body: { name?: string; description?: string; isSubflow?: boolean; parameters?: any[]; projectId?: string; nodes?: any[]; connections?: any[] } }>(
       '/api/pipelines',
       async (req, reply) => {
         const userId = (req.user as any).id;
         const id = generateId('pipeline');
         const now = timestamp();
+
+        // Scope the pipeline to the requested project, or the user's default project
+        // when none is supplied (keeps every workflow attached to a project).
+        let projectId = (req.body as Record<string, any>)?.projectId as string | undefined;
+        if (!projectId) {
+          projectId = (await projectsRepo.ensureDefaultProject(userId)).id;
+        }
 
         const workflow: SerializedWorkflow = {
           schemaVersion: SCHEMA_VERSION,
@@ -167,6 +177,7 @@ export async function pipelineRoutes(
             description: (req.body as Record<string, any>)?.description || '',
             isSubflow: (req.body as Record<string, any>)?.isSubflow || false,
             parameters: (req.body as Record<string, any>)?.parameters || [],
+            projectId,
             createdAt: now,
             updatedAt: now,
           },

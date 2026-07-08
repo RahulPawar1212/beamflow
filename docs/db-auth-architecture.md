@@ -73,14 +73,25 @@ erDiagram
         text email UK
         text password_hash
         text name
+        text gemini_api_key
         text created_at
     }
-    workflows {
+    projects {
         text id PK
         text owner_id FK
         text name
         text description
+        text created_at
+        text updated_at
+    }
+    workflows {
+        text id PK
+        text owner_id FK
+        text project_id FK
+        text name
+        text description
         text settings_json
+        integer is_subflow
         text created_at
         text updated_at
     }
@@ -101,10 +112,24 @@ erDiagram
         integer is_secret
     }
 
+    users ||--o{ projects : owns
     users ||--o{ workflows : owns
+    projects ||--o{ workflows : groups
     workflows ||--o{ workflow_versions : snapshotted_in
     workflows ||--o{ variables : configures
 ```
+
+**Notes on recent columns/tables:**
+- `projects` groups a user's workflows; see [projects.md](projects.md).
+- `workflows.project_id` is a **nullable** FK (existing rows are backfilled to a per-user
+  "Default Project" on startup).
+- `workflows.is_subflow` marks reusable nested pipelines; see [subflows.md](subflows.md).
+- `users.gemini_api_key` stores the user's own Gemini key for the AI Flow Maker.
+
+**Cascade caveat:** although FKs declare `ON DELETE CASCADE`, libSQL does not reliably
+honor `PRAGMA foreign_keys` across its per-statement local-file connections, so
+project→workflow deletion is performed **explicitly in `projects.repo.ts`** rather than
+relying on the DB cascade. The pragma is still enabled in `db/client.ts` as a backstop.
 
 ---
 

@@ -73,6 +73,11 @@ interface WorkflowState {
   isSubflow: boolean;
   pipelineParameters: Array<{ id: string; name: string; type: string; targetNodeId: string; targetSettingKey: string; }>;
 
+  // Active project — new pipelines/subflows are created inside it, and the
+  // Workflows list is scoped to it.
+  currentProjectId: string | null;
+  currentProjectName: string;
+
   // React Flow state
   nodes: Node<NodeData>[];
   edges: Edge[];
@@ -178,6 +183,9 @@ interface WorkflowState {
   loadWorkflow: (workflow: SerializedWorkflowDTO, clearStack?: boolean) => void;
   clearWorkflow: () => void;
 
+  // Projects
+  setCurrentProject: (id: string | null, name: string) => void;
+
   // Subflow Navigation
   enterSubflow: (subflow: SerializedWorkflowDTO) => void;
   exitSubflow: () => void;
@@ -198,6 +206,8 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   pipelineName: 'Untitled Pipeline',
   isSubflow: false,
   pipelineParameters: [],
+  currentProjectId: null,
+  currentProjectName: '',
   nodes: [],
   edges: [],
   selectedNodeId: null,
@@ -627,6 +637,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       createdSubflow = await api.createPipeline({
         name: name.trim() || 'Subflow',
         isSubflow: true,
+        projectId: state.currentProjectId ?? undefined,
         nodes: subNodes,
         connections: subConnections,
       });
@@ -745,6 +756,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
           name: state.pipelineName,
           isSubflow: workflow.metadata.isSubflow,
           parameters: workflow.metadata.parameters,
+          projectId: state.currentProjectId ?? undefined,
           nodes: workflow.nodes,
           connections: workflow.connections,
         });
@@ -772,6 +784,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
         name: newName,
         isSubflow: workflow.metadata.isSubflow,
         parameters: workflow.metadata.parameters,
+        projectId: state.currentProjectId ?? undefined,
         nodes: workflow.nodes,
         connections: workflow.connections
       });
@@ -939,6 +952,8 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     // Schema propagation: clear all schema state
     useSchemaStore.getState().clearSchemas();
   },
+
+  setCurrentProject: (id, name) => set({ currentProjectId: id, currentProjectName: name }),
 
   // === Subflow Navigation ====================================================
 

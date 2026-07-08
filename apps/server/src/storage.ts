@@ -13,7 +13,7 @@ import type { SerializedWorkflow } from '@beamflow/shared';
 
 /** Storage interface — implement this for different backends. */
 export interface IStorage {
-  list(userId?: string, options?: { includeSubflows?: boolean }): Promise<SerializedWorkflow[]>;
+  list(userId?: string, options?: { includeSubflows?: boolean; projectId?: string }): Promise<SerializedWorkflow[]>;
   get(id: string, userId?: string): Promise<SerializedWorkflow | null>;
   save(workflow: SerializedWorkflow, userId?: string): Promise<void>;
   delete(id: string, userId?: string): Promise<boolean>;
@@ -99,7 +99,7 @@ import { workflowsRepo } from './db/repositories/workflows.repo.js';
  * LibSQL/PostgreSQL database storage.
  */
 export class DrizzleStorage implements IStorage {
-  async list(userId?: string, options?: { includeSubflows?: boolean }): Promise<SerializedWorkflow[]> {
+  async list(userId?: string, options?: { includeSubflows?: boolean; projectId?: string }): Promise<SerializedWorkflow[]> {
     if (!userId) return [];
     return workflowsRepo.list(userId, options);
   }

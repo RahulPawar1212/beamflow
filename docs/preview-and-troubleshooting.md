@@ -1,6 +1,8 @@
-# BeamFlow Architecture & Troubleshooting Guide
+# BeamFlow Preview, State Sync & Troubleshooting Guide
 
-This guide is designed for developers (junior to senior) working on the BeamFlow project. It covers the core execution model, how the frontend and backend synchronize state, how preview caching works, and how to debug common issues.
+This guide covers how the frontend and backend synchronize state, how the preview caching
+layer works, and how to debug common issues. For the overall system architecture see
+[architecture.md](architecture.md).
 
 ## 1. Core Execution Model
 

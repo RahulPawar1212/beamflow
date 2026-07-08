@@ -18,6 +18,12 @@ if (isPg) {
     ? 'file::memory:?cache=shared'
     : (dbUrl?.startsWith('file:') ? dbUrl : `file:${dbUrl || 'beamflow.db'}`);
   const client = createClient({ url: sqliteFile });
+  // SQLite enforces foreign keys (and ON DELETE CASCADE) only when this pragma is
+  // enabled — libSQL defaults it OFF. Without it, deleting a parent row (e.g. a
+  // project) fails with SQLITE_CONSTRAINT_FOREIGNKEY instead of cascading.
+  client.execute('PRAGMA foreign_keys = ON').catch((err) => {
+    console.error('[Database] Failed to enable foreign_keys pragma:', err);
+  });
   dbInstance = drizzleLibsql(client, { schema });
   console.log(`[Database] Connected to LibSQL/SQLite (${sqliteFile})`);
 }

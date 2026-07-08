@@ -5,8 +5,9 @@ This document outlines the system architecture, design patterns, and data flow o
 ### Related documents
 - [schema-propagation.md](schema-propagation.md) — design-time schema/column inference engine.
 - [subflows.md](subflows.md) — reusable nested pipelines (grouping, expansion, parameters, port mapping).
+- [projects.md](projects.md) — grouping workflows & subflows under user-owned projects.
 - [db-auth-architecture.md](db-auth-architecture.md) — SQL persistence (Drizzle/SQLite/Postgres) & user auth.
-- [architecture-and-troubleshooting.md](architecture-and-troubleshooting.md) — preview caching & debugging.
+- [preview-and-troubleshooting.md](preview-and-troubleshooting.md) — preview caching, cache states & debugging.
 - [apache-beam-execution-model.md](apache-beam-execution-model.md), [plugin-guide.md](plugin-guide.md).
 
 > **Note:** the Storage & Execution section below predates the SQL backend. Workflows are

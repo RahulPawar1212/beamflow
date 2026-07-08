@@ -24,6 +24,8 @@ export default function App() {
   const isAIPanelOpen = useWorkflowStore((s) => s.isAIPanelOpen);
   const isSettingsModalOpen = useWorkflowStore((s) => s.isSettingsModalOpen);
   const setSettingsModalOpen = useWorkflowStore((s) => s.setSettingsModalOpen);
+  const currentProjectId = useWorkflowStore((s) => s.currentProjectId);
+  const setCurrentProject = useWorkflowStore((s) => s.setCurrentProject);
 
   // Initialize theme on mount
   useEffect(() => {
@@ -55,6 +57,20 @@ export default function App() {
     }
     loadNodes();
   }, [token, setNodeDefinitions, addToast]);
+
+  // Ensure an active project on startup. The server guarantees at least a
+  // "Default Project" per user (startup backfill), so the first entry is a safe
+  // default; the user can switch via the toolbar's project chip.
+  useEffect(() => {
+    if (!token || currentProjectId) return;
+    api.listProjects()
+      .then(({ projects }) => {
+        if (projects.length > 0) {
+          setCurrentProject(projects[0].id, projects[0].name);
+        }
+      })
+      .catch((err) => console.error('Failed to load projects:', err));
+  }, [token, currentProjectId, setCurrentProject]);
 
   if (!token) {
     return <LoginPage />;

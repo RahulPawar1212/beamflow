@@ -6,11 +6,12 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   Save, Play, Code2, Undo2, Redo2, Download, Upload,
   Loader2, Zap, Copy, Check, X, CheckCircle2, XCircle, FileCode2,
-  Sun, Moon, SunDim, LogOut, User, FolderOpen, Plus, Trash2, Clock, Settings
+  Sun, Moon, SunDim, LogOut, User, FolderOpen, Plus, Trash2, Clock, Settings,
+  Boxes, Pencil
 } from 'lucide-react';
 import { useWorkflowStore } from '../store/workflow-store.js';
 import { useAuthStore } from '../lib/auth-store.js';
-import { api, type PipelineSummary } from '../api/client.js';
+import { api, type PipelineSummary, type ProjectDTO } from '../api/client.js';
 import {
   Dialog,
   DialogContent,
@@ -52,6 +53,10 @@ export function Toolbar() {
 
   const [showCode, setShowCode] = useState(false);
   const [showSwitcher, setShowSwitcher] = useState(false);
+  const [showProjects, setShowProjects] = useState(false);
+  const currentProjectId = useWorkflowStore((s) => s.currentProjectId);
+  const currentProjectName = useWorkflowStore((s) => s.currentProjectName);
+  const setCurrentProject = useWorkflowStore((s) => s.setCurrentProject);
   const saveWorkflow = useWorkflowStore((s) => s.saveWorkflow);
 
   // ─── Save ─────────────────────────────────────────────────────────
@@ -205,32 +210,46 @@ export function Toolbar() {
 
   return (
     <>
-      <div className="h-12 glass flex items-center px-5 gap-2 border-b border-[var(--color-border)] z-10">
+      <div className="h-12 glass flex items-center px-3 sm:px-5 gap-2 border-b border-[var(--color-border)] z-10">
         {/* Logo */}
-        <div className="flex items-center gap-2 mr-3">
+        <div className="flex items-center gap-2 mr-1 sm:mr-3 shrink-0">
           <Zap size={18} className="text-indigo-400" />
-          <span className="text-sm font-bold bg-gradient-to-r from-indigo-400 to-purple-400 bg-clip-text text-transparent">
+          <span className="hidden sm:inline text-sm font-bold bg-gradient-to-r from-indigo-400 to-purple-400 bg-clip-text text-transparent">
             BeamFlow
           </span>
         </div>
 
         {/* Pipeline name */}
-        <div className="flex items-center gap-1.5 min-w-0">
+        <div className="flex items-center gap-1.5 min-w-0 flex-shrink">
           <input
             type="text"
             value={pipelineName}
             onChange={(e) => setPipelineName(e.target.value)}
             spellCheck={false}
-            className="text-sm bg-transparent border border-transparent rounded-md px-1.5 py-0.5 outline-none text-[var(--color-text-secondary)] hover:border-[var(--color-border)] focus:border-indigo-500/50 focus:text-[var(--color-text-primary)] min-w-[160px] max-w-[280px] font-medium transition-colors"
+            className="text-sm bg-transparent border border-transparent rounded-md px-1.5 py-0.5 outline-none text-[var(--color-text-secondary)] hover:border-[var(--color-border)] focus:border-indigo-500/50 focus:text-[var(--color-text-primary)] w-full min-w-[80px] max-w-[280px] font-medium transition-colors"
           />
           {/* Dirty / saved indicator */}
           <SaveStatus isDirty={isDirty} isSaving={isSaving} />
         </div>
 
-        <div className="flex-1" />
+        <div className="flex-1 min-w-2" />
 
         {/* Action buttons */}
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 shrink-0">
+          {/* Active project chip → opens project switcher */}
+          <button
+            onClick={() => setShowProjects(true)}
+            title="Switch or manage projects"
+            className="flex items-center gap-1.5 h-8 px-2.5 rounded-md border border-[var(--color-border)]
+              bg-[var(--color-surface-200)]/40 hover:bg-[var(--color-surface-200)] hover:border-gray-500
+              text-xs font-medium text-gray-300 transition-colors max-w-[180px]"
+          >
+            <Boxes size={14} className="text-indigo-400 shrink-0" />
+            <span className="truncate">{currentProjectName || 'Select project'}</span>
+          </button>
+
+          <div className="w-px h-5 bg-[var(--color-border)] mx-1" />
+
           {/* Workflows */}
           <ToolbarButton
             icon={FolderOpen}
@@ -355,6 +374,24 @@ export function Toolbar() {
 
       {/* Code Preview Modal */}
       {showCode && <CodeModal onClose={() => setShowCode(false)} />}
+
+      {/* Project Switcher Modal */}
+      {showProjects && (
+        <ProjectSwitcherModal
+          currentProjectId={currentProjectId}
+          onClose={() => setShowProjects(false)}
+          onSelect={(id, name) => {
+            setShowProjects(false);
+            if (id !== currentProjectId) {
+              setCurrentProject(id, name);
+              // Leaving the current project's context — start on a blank canvas so
+              // the open pipeline (which belongs to the old project) isn't ambiguous.
+              clearWorkflow();
+              addToast('success', `Switched to project "${name}"`);
+            }
+          }}
+        />
+      )}
 
       {/* Workflow Switcher Modal */}
       {showSwitcher && (
@@ -491,6 +528,198 @@ function CodeModal({ onClose }: { onClose: () => void }) {
   );
 }
 
+// ─── Project Switcher Modal ─────────────────────────────────────────
+
+function ProjectSwitcherModal({
+  currentProjectId,
+  onClose,
+  onSelect,
+}: {
+  currentProjectId: string | null;
+  onClose: () => void;
+  onSelect: (id: string, name: string) => void;
+}) {
+  const [projects, setProjects] = useState<ProjectDTO[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [newName, setNewName] = useState('');
+  const [creating, setCreating] = useState(false);
+  const addToast = useWorkflowStore((s) => s.addToast);
+  const setCurrentProject = useWorkflowStore((s) => s.setCurrentProject);
+
+  useEffect(() => {
+    let mounted = true;
+    api
+      .listProjects()
+      .then((res) => {
+        if (mounted) {
+          setProjects(res.projects);
+          setLoading(false);
+        }
+      })
+      .catch((err) => {
+        if (mounted) {
+          setError(err instanceof Error ? err.message : 'Failed to load projects');
+          setLoading(false);
+        }
+      });
+    return () => { mounted = false; };
+  }, []);
+
+  const handleCreate = async () => {
+    const name = newName.trim();
+    if (!name) return;
+    setCreating(true);
+    try {
+      const created = await api.createProject({ name });
+      setProjects((prev) => [...prev, created]);
+      setNewName('');
+      addToast('success', `Project "${created.name}" created`);
+    } catch (err) {
+      addToast('error', `Failed to create project: ${err instanceof Error ? err.message : err}`);
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const handleRename = async (e: React.MouseEvent, p: ProjectDTO) => {
+    e.stopPropagation();
+    const name = prompt('Rename project', p.name)?.trim();
+    if (!name || name === p.name) return;
+    try {
+      const updated = await api.updateProject(p.id, { name });
+      setProjects((prev) => prev.map((x) => (x.id === p.id ? updated : x)));
+      if (p.id === currentProjectId) setCurrentProject(p.id, updated.name);
+      addToast('success', 'Project renamed');
+    } catch (err) {
+      addToast('error', `Failed to rename: ${err instanceof Error ? err.message : err}`);
+    }
+  };
+
+  const handleDelete = async (e: React.MouseEvent, p: ProjectDTO) => {
+    e.stopPropagation();
+    // Typed confirm: deleting a project cascade-deletes all its workflows & subflows.
+    const answer = prompt(
+      `Delete project "${p.name}"? This permanently deletes ALL its workflows and subflows.\n\nType the project name to confirm:`,
+    );
+    if (answer !== p.name) {
+      if (answer !== null) addToast('error', 'Name did not match — project not deleted');
+      return;
+    }
+    try {
+      await api.deleteProject(p.id);
+      setProjects((prev) => prev.filter((x) => x.id !== p.id));
+      addToast('success', 'Project deleted');
+      if (p.id === currentProjectId) {
+        // Fall back to the first remaining project.
+        const remaining = projects.filter((x) => x.id !== p.id);
+        if (remaining.length > 0) onSelect(remaining[0].id, remaining[0].name);
+        else setCurrentProject(null, '');
+      }
+    } catch (err) {
+      addToast('error', `Failed to delete: ${err instanceof Error ? err.message : err}`);
+    }
+  };
+
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="max-w-[95vw] sm:max-w-2xl w-full p-0 gap-0 overflow-hidden bg-[var(--color-surface-100)] border-[var(--color-border)]">
+        <DialogHeader className="px-5 py-4 pr-12 border-b border-[var(--color-border)] bg-[var(--color-surface-200)]">
+          <DialogTitle className="flex items-center gap-2">
+            <Boxes size={18} className="text-indigo-400" />
+            <span className="text-gray-200 text-base">Projects</span>
+          </DialogTitle>
+        </DialogHeader>
+
+        {/* Create row */}
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-[var(--color-border)] bg-[var(--color-surface-100)]">
+          <input
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleCreate(); }}
+            placeholder="New project name…"
+            className="flex-1 h-9 px-3 rounded-md bg-[var(--color-surface-200)] border border-[var(--color-border)]
+              text-sm text-gray-200 outline-none focus:border-indigo-500/50"
+          />
+          <Button
+            onClick={handleCreate}
+            disabled={!newName.trim() || creating}
+            size="sm"
+            className="bg-indigo-600 hover:bg-indigo-500 text-white font-medium h-9 px-3"
+          >
+            {creating ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} className="mr-1.5" />}
+            Create
+          </Button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto max-h-[70vh] p-4 bg-[var(--color-surface-100)]">
+          {loading ? (
+            <div className="flex items-center justify-center py-12 text-gray-500 gap-2">
+              <Loader2 size={16} className="animate-spin" />
+              Loading projects...
+            </div>
+          ) : error ? (
+            <div className="text-center py-8 text-red-400 text-sm">
+              <XCircle size={24} className="mx-auto mb-2 opacity-50" />
+              {error}
+            </div>
+          ) : projects.length === 0 ? (
+            <div className="text-center py-12">
+              <Boxes size={32} className="mx-auto mb-3 text-gray-600" />
+              <p className="text-sm font-medium text-gray-400">No projects yet</p>
+              <p className="text-xs text-gray-500 mt-1">Create a project above to organize your workflows.</p>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-2">
+              {projects.map((p) => {
+                const isCurrent = p.id === currentProjectId;
+                return (
+                  <div
+                    key={p.id}
+                    onClick={() => onSelect(p.id, p.name)}
+                    className={`group relative px-4 py-3 rounded-lg border flex items-center justify-between transition-all cursor-pointer
+                      ${isCurrent
+                        ? 'border-indigo-500/50 bg-indigo-500/10'
+                        : 'border-[var(--color-border)] bg-[var(--color-surface-200)]/40 hover:border-gray-500 hover:bg-[var(--color-surface-200)]'
+                      }`}
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <Boxes size={16} className="text-indigo-400 shrink-0" />
+                      <h4 className="text-sm font-bold text-gray-200 truncate">{p.name}</h4>
+                      {isCurrent && (
+                        <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 text-[10px] font-bold shrink-0">
+                          <span className="w-1.5 h-1.5 rounded-full bg-indigo-400" />
+                          Active
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        onClick={(e) => handleRename(e, p)}
+                        className="p-1.5 rounded-md text-gray-500 opacity-0 group-hover:opacity-100 hover:text-indigo-400 hover:bg-indigo-500/10 transition-all"
+                        title="Rename project"
+                      >
+                        <Pencil size={15} />
+                      </button>
+                      <button
+                        onClick={(e) => handleDelete(e, p)}
+                        className="p-1.5 rounded-md text-gray-500 opacity-0 group-hover:opacity-100 hover:text-red-400 hover:bg-red-500/10 transition-all"
+                        title="Delete project (and all its workflows)"
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ─── Workflow Switcher Modal ────────────────────────────────────────
 
 function WorkflowSwitcherModal({
@@ -506,12 +735,13 @@ function WorkflowSwitcherModal({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const currentId = useWorkflowStore((s) => s.pipelineId);
+  const currentProjectId = useWorkflowStore((s) => s.currentProjectId);
   const addToast = useWorkflowStore((s) => s.addToast);
 
   useEffect(() => {
     let mounted = true;
     api
-      .listPipelines()
+      .listPipelines(currentProjectId ?? undefined)
       .then((res) => {
         if (mounted) {
           setPipelines(res.pipelines);
@@ -527,7 +757,7 @@ function WorkflowSwitcherModal({
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [currentProjectId]);
 
   const handleDelete = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
@@ -636,6 +866,7 @@ function WorkflowSwitcherModal({
                             const newName = pData.metadata.name.includes('Copy') ? pData.metadata.name : `${pData.metadata.name} (Copy)`;
                             const created = await api.createPipeline({
                               name: newName,
+                              projectId: currentProjectId ?? undefined,
                               nodes: pData.nodes,
                               connections: pData.connections
                             });
@@ -644,6 +875,7 @@ function WorkflowSwitcherModal({
                                 id: created.metadata.id,
                                 name: created.metadata.name,
                                 description: created.metadata.description,
+                                projectId: created.metadata.projectId,
                                 createdAt: created.metadata.createdAt,
                                 updatedAt: created.metadata.updatedAt,
                                 nodeCount: created.nodes.length,
@@ -799,7 +1031,7 @@ function ToolbarButton({
         ${colors}`}
     >
       <Icon size={14} className={spinning ? 'animate-spin' : ''} />
-      <span className="hidden lg:inline">{label}</span>
+      <span className="hidden xl:inline">{label}</span>
     </button>
   );
 }

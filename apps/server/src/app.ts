@@ -19,9 +19,11 @@ import { authRoutes } from './routes/auth.js';
 import { variableRoutes } from './routes/variables.js';
 import { versionRoutes } from './routes/versions.js';
 import { userRoutes } from './routes/users.js';
+import { projectRoutes } from './routes/projects.js';
 import { DrizzleStorage, type IStorage } from './storage.js';
 import { registerErrorHandler } from './errors.js';
 import { runMigrations } from './db/migrate.js';
+import { ensureDefaultProjects } from './db/repositories/projects.repo.js';
 
 // Augment FastifyInstance type to include authenticate
 declare module 'fastify' {
@@ -60,6 +62,11 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<{
   if (!options.skipMigrations) {
     await runMigrations().catch((err) => {
       console.error('[buildApp] Error running migrations on startup:', err);
+    });
+    // Idempotent backfill: give every user a Default project and file any
+    // project-less workflow into it (no-op once all workflows have a project).
+    await ensureDefaultProjects().catch((err) => {
+      console.error('[buildApp] Error ensuring default projects:', err);
     });
   }
 
@@ -106,6 +113,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<{
   // Wire Routes
   await authRoutes(app);
   await userRoutes(app);
+  await projectRoutes(app);
   await variableRoutes(app);
   await versionRoutes(app);
   await nodeRoutes(app, registry);

@@ -937,6 +937,15 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
 
   clearWorkflow: () => {
     set({
+      // Reset pipeline identity — a "New Workflow" must not inherit the previous
+      // pipeline's id (else the next Save overwrites it), its name, or — critically
+      // — its isSubflow flag. Leaving isSubflow=true here caused every subsequent
+      // "new" workflow to be persisted as a subflow, which the Workflows list hides.
+      pipelineId: null,
+      pipelineName: 'Untitled Pipeline',
+      isSubflow: false,
+      pipelineParameters: [],
+      navigationStack: [],
       nodes: [],
       edges: [],
       selectedNodeId: null,

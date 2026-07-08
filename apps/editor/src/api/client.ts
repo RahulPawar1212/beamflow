@@ -105,8 +105,11 @@ export const api = {
     request<void>(`/projects/${seg(id)}`, { method: 'DELETE' }),
 
   // Pipelines
-  listPipelines: (projectId?: string) => {
-    const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : '';
+  listPipelines: (projectId?: string, includeSubflows?: boolean) => {
+    const params = new URLSearchParams();
+    if (projectId) params.set('projectId', projectId);
+    if (includeSubflows) params.set('includeSubflows', 'true');
+    const query = params.toString() ? `?${params.toString()}` : '';
     return request<{ pipelines: PipelineSummary[] }>(`/pipelines${query}`);
   },
   getPipeline: (id: string) => request<SerializedWorkflowDTO>(`/pipelines/${seg(id)}`, { cache: 'no-store' }),

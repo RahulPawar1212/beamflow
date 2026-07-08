@@ -524,6 +524,13 @@ function SettingControl({ nodeId, setting, value, onChange, inputColumns }: Sett
         <div className="text-[10px] text-gray-600 mb-1">{setting.description}</div>
       )}
 
+      {/* Subflow reference: pick an existing subflow (overrides the fixed text
+          input). Setting subflowId triggers refreshSubflowCache(true) →
+          central schema-sync (see updateNodeSettings). */}
+      {setting.key === 'subflowId' ? (
+        <SubflowPicker nodeId={nodeId} value={(value as string) || ''} onChange={onChange} baseInputClass={baseInputClass} />
+      ) : (
+      <>
       {/* Text / Expression */}
       {(setting.type === 'text' || setting.type === 'expression') && (
         isColumnDropdown ? (
@@ -682,7 +689,67 @@ function SettingControl({ nodeId, setting, value, onChange, inputColumns }: Sett
           ))}
         </select>
       )}
+      </>
+      )}
     </div>
+  );
+}
+
+// ─── Subflow picker ────────────────────────────────────────────────
+// Lets a `system:subflow` node reference an existing subflow (isSubflow=true)
+// in the current project. Picking one sets `subflowId` (→ schema propagation)
+// and relabels the on-canvas node to the subflow's name.
+function SubflowPicker({
+  nodeId,
+  value,
+  onChange,
+  baseInputClass,
+}: {
+  nodeId: string;
+  value: string;
+  onChange: (v: unknown) => void;
+  baseInputClass: string;
+}) {
+  const currentProjectId = useWorkflowStore((s) => s.currentProjectId);
+  const currentPipelineId = useWorkflowStore((s) => s.pipelineId);
+  const updateNodeLabel = useWorkflowStore((s) => s.updateNodeLabel);
+  const [subflows, setSubflows] = React.useState<Array<{ id: string; name: string }>>([]);
+  const [loading, setLoading] = React.useState(true);
+
+  React.useEffect(() => {
+    let mounted = true;
+    api
+      .listPipelines(currentProjectId ?? undefined, true)
+      .then((res) => {
+        if (!mounted) return;
+        // Only subflows, and never let a subflow reference itself.
+        setSubflows(
+          res.pipelines
+            .filter((p) => p.isSubflow && p.id !== currentPipelineId)
+            .map((p) => ({ id: p.id, name: p.name })),
+        );
+        setLoading(false);
+      })
+      .catch(() => { if (mounted) setLoading(false); });
+    return () => { mounted = false; };
+  }, [currentProjectId, currentPipelineId]);
+
+  return (
+    <select
+      value={value}
+      onChange={(e) => {
+        const id = e.target.value;
+        onChange(id);
+        const picked = subflows.find((s) => s.id === id);
+        if (picked) updateNodeLabel(nodeId, picked.name);
+      }}
+      className={baseInputClass}
+    >
+      <option value="">{loading ? 'Loading subflows…' : '-- Select a subflow --'}</option>
+      {subflows.map((s) => (
+        <option key={s.id} value={s.id}>{s.name}</option>
+      ))}
+    </select>
   );
 }
 

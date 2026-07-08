@@ -77,6 +77,10 @@ const categoryLabels: Record<string, string> = {
 
 const categoryOrder = ['custom', 'source', 'transform', 'arithmetic', 'logical', 'output', 'ml'];
 
+// Node types that stay registered but are never shown in the palette (they only
+// exist inside a subflow being edited).
+const HIDDEN_PALETTE_TYPES = new Set(['system:subflow-input', 'system:subflow-output']);
+
 export function NodePalette() {
   const nodeDefinitions = useWorkflowStore((s) => s.nodeDefinitions);
   const addNode = useWorkflowStore((s) => s.addNode);
@@ -91,14 +95,20 @@ export function NodePalette() {
 
   // Group and filter nodes
   const groupedNodes = useMemo(() => {
+    // Subflow boundary nodes only make sense INSIDE a subflow being edited; they
+    // are created automatically by "Group as node", never dragged from the
+    // palette. They stay registered (needed for subflow editing + schema
+    // expansion) but are hidden here. The `system:subflow` proxy stays visible —
+    // dragging it lets the user attach an existing subflow (picker in the panel).
+    const visible = nodeDefinitions.filter((n) => !HIDDEN_PALETTE_TYPES.has(n.type));
     const filtered = searchQuery.trim()
-      ? nodeDefinitions.filter(
+      ? visible.filter(
           (n) =>
             n.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
             n.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
             n.tags?.some((t) => t.toLowerCase().includes(searchQuery.toLowerCase())),
         )
-      : nodeDefinitions;
+      : visible;
 
     const groups: Record<string, NodeDef[]> = {};
     for (const node of filtered) {

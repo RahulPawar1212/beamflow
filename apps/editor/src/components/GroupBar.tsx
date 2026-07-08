@@ -9,16 +9,16 @@ import { useWorkflowStore } from '../store/workflow-store';
 
 export function GroupBar() {
   const nodes = useWorkflowStore((s) => s.nodes);
-  const groupSelectedIntoNode = useWorkflowStore((s) => s.groupSelectedIntoNode);
+  const createSubflowFromSelection = useWorkflowStore((s) => s.createSubflowFromSelection);
+  const selectedCount = useWorkflowStore((s) => s.selectedCount());
   const addToast = useWorkflowStore((s) => s.addToast);
-
-  const selectedCount = nodes.filter((n) => n.selected).length;
+  const [isGrouping, setIsGrouping] = useState(false);
   const [naming, setNaming] = useState(false);
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
 
-  // Only meaningful for 2+ selected nodes.
-  if (selectedCount < 2) {
+  // Only meaningful for 1+ selected nodes.
+  if (selectedCount < 1) {
     if (naming) setNaming(false);
     return null;
   }
@@ -26,10 +26,10 @@ export function GroupBar() {
   const submit = async () => {
     if (busy) return;
     setBusy(true);
-    const result = await groupSelectedIntoNode(name || 'Grouped Node');
+    const result = await createSubflowFromSelection(name || 'Subflow');
     setBusy(false);
     if (result.ok) {
-      addToast('success', `Created composite node "${name || 'Grouped Node'}"`);
+      addToast('success', `Created subflow "${name || 'Subflow'}"`);
       setNaming(false);
       setName('');
     } else {

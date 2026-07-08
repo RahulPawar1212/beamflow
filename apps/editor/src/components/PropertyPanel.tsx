@@ -5,7 +5,7 @@
 
 import React from 'react';
 import { createPortal } from 'react-dom';
-import { X, Settings2, Trash2, Plus, Database, UploadCloud, Loader2 } from 'lucide-react';
+import { X, Settings2, Trash2, Plus, Database, UploadCloud, Loader2, Boxes, Link } from 'lucide-react';
 import { useWorkflowStore } from '../store/workflow-store.js';
 import { useSchemaStore } from '../lib/schema-store.js';
 import { api } from '../api/client.js';
@@ -45,6 +45,23 @@ export function PropertyPanel() {
     groups.get(group)!.push(s);
   }
 
+  // Inject Subflow Parameters
+  if (selectedNode.data.nodeType === 'system:subflow' && settings.subflowId) {
+    const subflowCache = useWorkflowStore.getState().subflowCache;
+    const subflowDef = subflowCache[settings.subflowId as string];
+    if (subflowDef?.metadata?.parameters) {
+      const paramSettings = subflowDef.metadata.parameters.map((p: any) => ({
+        key: p.id,
+        label: p.name,
+        type: p.type === 'enum' ? 'select' : p.type, // simplified for now
+        group: 'Subflow Parameters',
+      }));
+      if (paramSettings.length > 0) {
+        groups.set('Subflow Parameters', paramSettings as any);
+      }
+    }
+  }
+
   // Sort each group by order
   for (const [, groupSettings] of groups) {
     groupSettings.sort((a, b) => (a.order || 99) - (b.order || 99));
@@ -79,6 +96,11 @@ export function PropertyPanel() {
       } catch (err) {
         console.error('Auto schema detection failed:', err);
       }
+    }
+    
+    // Refresh subflow cache if subflowId changes
+    if (selectedNode.data.nodeType === 'system:subflow' && key === 'subflowId') {
+      useWorkflowStore.getState().refreshSubflowCache();
     }
   };
 
@@ -168,6 +190,7 @@ export function PropertyPanel() {
                 return (
                   <SettingControl
                     key={s.key}
+                    nodeId={selectedNode.id}
                     setting={s}
                     value={settings[s.key]}
                     onChange={(v) => handleChange(s.key, v)}
@@ -178,6 +201,27 @@ export function PropertyPanel() {
             </div>
           </div>
         ))}
+
+        {/* Custom Editor for Subflow Node */}
+        {selectedNode.data.nodeType === 'system:subflow' && (
+          <div className="border-t border-[var(--color-border)] pt-4 mt-2 px-1">
+            <button
+              onClick={async () => {
+                const subflowId = settings.subflowId as string;
+                if (!subflowId) return;
+                try {
+                  const subflow = await api.getPipeline(subflowId);
+                  useWorkflowStore.getState().enterSubflow(subflow);
+                } catch (err) {
+                  console.error('Failed to load subflow', err);
+                }
+              }}
+              className="w-full flex items-center justify-center gap-1 text-xs text-cyan-400 hover:text-cyan-300 font-semibold px-2 py-2 border border-cyan-500/30 rounded-lg hover:bg-cyan-500/10 transition-colors"
+            >
+              <Boxes size={14} /> Open Subflow
+            </button>
+          </div>
+        )}
 
         {/* Custom Schema Editor for CSV and SQL Source nodes */}
         {selectedNode.data.nodeType === 'beamflow:csv-source' && (
@@ -416,16 +460,23 @@ function SchemaEditor({
 // ─── Setting Control Renderer ───────────────────────────────────────
 
 interface SettingControlProps {
+  nodeId: string;
   setting: NodeDef['settings'][0];
   value: unknown;
   onChange: (value: unknown) => void;
   inputColumns: any[];
 }
 
-function SettingControl({ setting, value, onChange, inputColumns }: SettingControlProps) {
+function SettingControl({ nodeId, setting, value, onChange, inputColumns }: SettingControlProps) {
   const [isUploading, setIsUploading] = React.useState(false);
   const [uploadError, setUploadError] = React.useState<string | null>(null);
   const isFixed = setting.fixed;
+  
+  const isSubflow = useWorkflowStore((s) => s.isSubflow);
+  const pipelineParameters = useWorkflowStore((s) => s.pipelineParameters);
+  const togglePipelineParameter = useWorkflowStore((s) => s.togglePipelineParameter);
+
+  const isExposed = pipelineParameters.some(p => p.targetNodeId === nodeId && p.targetSettingKey === setting.key);
 
   const baseInputClass = `w-full px-2.5 py-1.5 text-xs rounded-lg
     bg-[var(--color-surface-200)] border border-[var(--color-border)]
@@ -437,8 +488,21 @@ function SettingControl({ setting, value, onChange, inputColumns }: SettingContr
 
   return (
     <div>
-      <label className="flex items-center gap-1 text-[11px] text-gray-400 mb-1">
-        {setting.label}
+      <label className="flex items-center gap-1 text-[11px] text-gray-400 mb-1 group">
+        <span className="flex-1">{setting.label}</span>
+        {isSubflow && (
+          <button
+            onClick={() => togglePipelineParameter(nodeId, setting.key, setting)}
+            title={isExposed ? "Remove parameter exposure" : "Expose as parameter on Subflow node"}
+            className={`p-1 rounded transition-colors ${
+              isExposed 
+                ? 'text-amber-400 bg-amber-400/10 hover:bg-amber-400/20' 
+                : 'text-gray-500 opacity-0 group-hover:opacity-100 hover:text-amber-400 hover:bg-amber-400/10'
+            }`}
+          >
+            <Link size={12} />
+          </button>
+        )}
         {setting.validation?.some((v) => v.type === 'required') && (
           <span className="text-red-400">*</span>
         )}

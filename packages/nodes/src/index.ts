@@ -27,6 +27,11 @@ import { groupBy } from './transforms/group-by.js';
 // Outputs
 import { csvOutput } from './outputs/csv-output.js';
 
+// System
+import { subflowNode } from './system/subflow.js';
+import { subflowInputNode } from './system/subflow-input.js';
+import { subflowOutputNode } from './system/subflow-output.js';
+
 /**
  * Every built-in node, in palette order.
  *
@@ -36,6 +41,10 @@ import { csvOutput } from './outputs/csv-output.js';
  * automatic (see `builtinNodesPlugin.register` below). No other edits needed.
  */
 export const builtinNodes: INodeDefinition[] = [
+  // System (often hidden from main palette, or placed carefully)
+  subflowNode,
+  subflowInputNode,
+  subflowOutputNode,
   // Sources
   csvSource,
   jsonSource,

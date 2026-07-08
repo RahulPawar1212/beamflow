@@ -121,13 +121,15 @@ export async function pipelineRoutes(
     // ─── CRUD ─────────────────────────────────────────────────────────
 
     /** GET /api/pipelines — List all saved pipelines. */
-    appWithAuth.get('/api/pipelines', async (req, reply) => {
+    appWithAuth.get<{ Querystring: { includeSubflows?: string } }>('/api/pipelines', async (req, reply) => {
       const userId = (req.user as any).id;
-      const workflows = await storage.list(userId);
+      const includeSubflows = req.query.includeSubflows === 'true';
+      const workflows = await storage.list(userId, { includeSubflows });
       const summaries = workflows.map((w) => ({
         id: w.metadata.id,
         name: w.metadata.name,
         description: w.metadata.description,
+        isSubflow: w.metadata.isSubflow,
         createdAt: w.metadata.createdAt,
         updatedAt: w.metadata.updatedAt,
         nodeCount: w.nodes.length,
@@ -150,7 +152,7 @@ export async function pipelineRoutes(
     );
 
     /** POST /api/pipelines — Create a new pipeline. */
-    appWithAuth.post<{ Body: { name?: string; description?: string; nodes?: any[]; connections?: any[] } }>(
+    appWithAuth.post<{ Body: { name?: string; description?: string; isSubflow?: boolean; parameters?: any[]; nodes?: any[]; connections?: any[] } }>(
       '/api/pipelines',
       async (req, reply) => {
         const userId = (req.user as any).id;
@@ -163,6 +165,8 @@ export async function pipelineRoutes(
             id,
             name: (req.body as Record<string, any>)?.name || 'Untitled Pipeline',
             description: (req.body as Record<string, any>)?.description || '',
+            isSubflow: (req.body as Record<string, any>)?.isSubflow || false,
+            parameters: (req.body as Record<string, any>)?.parameters || [],
             createdAt: now,
             updatedAt: now,
           },
@@ -232,7 +236,9 @@ export async function pipelineRoutes(
         }
 
         // Fire and forget — run in background
-        previewManager.triggerPreview(workflow, req.params.nodeId, 1000).catch(console.error);
+        expandSubflows(workflow, userId).then(expandedWorkflow => {
+          previewManager.triggerPreview(expandedWorkflow, req.params.nodeId, 1000).catch(console.error);
+        }).catch(console.error);
 
         return reply.status(202).send({ message: 'Preview generation started.' });
       }
@@ -272,6 +278,142 @@ export async function pipelineRoutes(
 
     // ─── Code Generation ──────────────────────────────────────────────
 
+    /**
+     * Recursively expands subflows by inlining their nodes and connections.
+     */
+    async function expandSubflows(
+      workflow: SerializedWorkflow,
+      userId: string,
+      depth = 0
+    ): Promise<SerializedWorkflow> {
+      if (depth > 10) throw new Error('Max subflow nesting depth exceeded (circular dependency?).');
+
+      let expandedNodes = [...workflow.nodes];
+      let expandedConnections = [...workflow.connections];
+
+      let hasSubflows = true;
+      while (hasSubflows) {
+        hasSubflows = false;
+        const subflowNodeIndex = expandedNodes.findIndex(n => n.type === 'system:subflow');
+        if (subflowNodeIndex === -1) break;
+        hasSubflows = true;
+
+        const originalSubflowNode = expandedNodes[subflowNodeIndex];
+        // DO NOT splice it out! We keep it as a proxy for previewability.
+        // Change type to system:subflow-output so it acts as a pass-through in execution.
+        const subflowNode = { ...originalSubflowNode, type: 'system:subflow-output' };
+        expandedNodes[subflowNodeIndex] = subflowNode;
+
+        const subflowId = subflowNode.settings?.subflowId;
+        if (!subflowId) throw new Error(`Subflow node ${subflowNode.id} is missing subflowId.`);
+
+        const subflowWf = await storage.get(subflowId as string, userId);
+        if (!subflowWf) throw new Error(`Subflow ${subflowId} not found.`);
+
+        const fullyExpandedSubflow = await expandSubflows(subflowWf, userId, depth + 1);
+
+        const prefix = `sub_${subflowNode.id}_`;
+        const mappedNodes = fullyExpandedSubflow.nodes.map(n => {
+          // Substitute parameters!
+          const mappedSettings = { ...n.settings };
+          if (fullyExpandedSubflow.metadata?.parameters) {
+            for (const param of fullyExpandedSubflow.metadata.parameters) {
+              if (param.targetNodeId === n.id && subflowNode.settings && param.id in subflowNode.settings) {
+                mappedSettings[param.targetSettingKey] = subflowNode.settings[param.id];
+              }
+            }
+          }
+          return {
+            ...n,
+            id: prefix + n.id,
+            settings: mappedSettings,
+          };
+        });
+        const mappedConnections = fullyExpandedSubflow.connections.map(c => ({
+          ...c,
+          id: prefix + c.id,
+          sourceNodeId: prefix + c.sourceNodeId,
+          targetNodeId: prefix + c.targetNodeId,
+        }));
+
+        const inputNodes = mappedNodes.filter(n => n.type === 'system:subflow-input');
+        const outputNodes = mappedNodes.filter(n => n.type === 'system:subflow-output');
+
+        const activeSubNodes = mappedNodes.filter(n => n.type !== 'system:subflow-input' && n.type !== 'system:subflow-output');
+        expandedNodes.push(...activeSubNodes);
+
+        const internalInputEdges = mappedConnections.filter(c => inputNodes.some(inNode => inNode.id === c.sourceNodeId));
+        const internalOutputEdges = mappedConnections.filter(c => outputNodes.some(outNode => outNode.id === c.targetNodeId));
+
+        const activeSubConnections = mappedConnections.filter(c => 
+          !inputNodes.some(inNode => inNode.id === c.sourceNodeId) &&
+          !outputNodes.some(outNode => outNode.id === c.targetNodeId)
+        );
+        expandedConnections.push(...activeSubConnections);
+
+        // Find parent edges connected to this subflow node
+        const parentInEdges = expandedConnections.filter(c => c.targetNodeId === subflowNode.id);
+        const parentOutEdges = expandedConnections.filter(c => c.sourceNodeId === subflowNode.id);
+
+        // Remove parent edges from expandedConnections since we rewire them
+        expandedConnections = expandedConnections.filter(c => c.targetNodeId !== subflowNode.id && c.sourceNodeId !== subflowNode.id);
+
+        // Build name → internal input node id map for per-port matching. The parent
+        // edge's targetPortId carries the boundary port name (set by the editor's
+        // grouping). Older single-IO subflows have no name match → fall back to input 0.
+        const inputIdByName = new Map<string, string>();
+        for (const inNode of inputNodes) {
+          const name = (inNode.settings?.inputName as string) ?? '';
+          if (name) inputIdByName.set(name, inNode.id);
+        }
+
+        // Rewire parent inputs to the matching subflow-input's downstream internal edges.
+        for (const pIn of parentInEdges) {
+          if (inputNodes.length === 0) continue;
+          const matchedInputId =
+            (pIn.targetPortId && inputIdByName.get(pIn.targetPortId)) || inputNodes[0].id;
+          // Only fan into internal edges that originate at the matched input node.
+          const edgesForInput = internalInputEdges.filter(
+            (e) => e.sourceNodeId === matchedInputId,
+          );
+          for (const internalEdge of edgesForInput) {
+            expandedConnections.push({
+              id: `rewired_${pIn.id}_${internalEdge.id}`,
+              sourceNodeId: pIn.sourceNodeId,
+              sourcePortId: pIn.sourcePortId,
+              targetNodeId: internalEdge.targetNodeId,
+              targetPortId: internalEdge.targetPortId,
+            });
+          }
+        }
+
+        // Rewire subflow internals to subflowNode (proxy). The proxy node's type was
+        // changed to system:subflow-output above, which has a single required input port
+        // 'in' — so every internal output edge must target 'in' (the proxy acts as a
+        // passthrough merge point). The parent's downstream out-edges keep their original
+        // sourcePortId (the output name) and are restored as-is below for per-output
+        // fan-out at codegen time.
+        for (const internalEdge of internalOutputEdges) {
+          expandedConnections.push({
+            id: `rewired_to_proxy_${internalEdge.id}`,
+            sourceNodeId: internalEdge.sourceNodeId,
+            sourcePortId: internalEdge.sourcePortId,
+            targetNodeId: subflowNode.id,
+            targetPortId: 'in',
+          });
+        }
+        
+        // Restore parent out edges, since subflowNode still exists
+        expandedConnections.push(...parentOutEdges);
+      }
+
+      return {
+        ...workflow,
+        nodes: expandedNodes,
+        connections: expandedConnections,
+      };
+    }
+
     /** POST /api/pipelines/:id/generate — Generate Beam code from pipeline. */
     appWithAuth.post<{ Params: { id: string } }>(
       '/api/pipelines/:id/generate',
@@ -283,8 +425,11 @@ export async function pipelineRoutes(
         }
 
         try {
+          // 0. Expand Subflows
+          const expandedWorkflow = await expandSubflows(workflow, userId);
+
           // 1. Deserialize to DAG
-          const { dag, metadata } = deserializeWorkflow(workflow);
+          const { dag, metadata } = deserializeWorkflow(expandedWorkflow);
 
           // 2. Validate graph
           const graphIssues = dag.validate(registry);
@@ -339,7 +484,8 @@ export async function pipelineRoutes(
 
         try {
           // Generate code first
-          const { dag, metadata } = deserializeWorkflow(workflow);
+          const expandedWorkflow = await expandSubflows(workflow, userId);
+          const { dag, metadata } = deserializeWorkflow(expandedWorkflow);
           const ir = buildIR(dag, registry, { name: metadata.name });
           const optimizedIR = optimizeIR(ir);
           const generated = generatePythonBeam(optimizedIR);

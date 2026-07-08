@@ -57,10 +57,21 @@ export interface GeneratedArtifact {
   requirements?: string[];
 }
 
+export interface NavigationStackEntry {
+  pipelineId: string | null;
+  pipelineName: string;
+  nodes: Node<NodeData>[];
+  edges: Edge[];
+  history: HistoryEntry[];
+  historyIndex: number;
+}
+
 interface WorkflowState {
   // Pipeline metadata
   pipelineId: string | null;
   pipelineName: string;
+  isSubflow: boolean;
+  pipelineParameters: Array<{ id: string; name: string; type: string; targetNodeId: string; targetSettingKey: string; }>;
 
   // React Flow state
   nodes: Node<NodeData>[];
@@ -77,6 +88,9 @@ interface WorkflowState {
   // Undo/redo
   history: HistoryEntry[];
   historyIndex: number;
+
+  // Subflow Navigation Stack
+  navigationStack: NavigationStackEntry[];
 
   // UI state
   isGenerating: boolean;
@@ -132,8 +146,8 @@ interface WorkflowState {
   upsertCustomNode: (def: CustomNodeDef) => void;
   deleteCustomNode: (id: string) => void;
   importCustomNodes: (defs: CustomNodeDef[]) => number;
-  /** Group currently-selected nodes into a composite custom node. */
-  groupSelectedIntoNode: (name: string) => Promise<{ ok: boolean; error?: string }>;
+  /** Create a new Subflow from the currently selected nodes. */
+  createSubflowFromSelection: (name: string) => Promise<{ ok: boolean; error?: string }>;
   /** How many nodes are currently selected (for enabling the group action). */
   selectedCount: () => number;
 
@@ -161,8 +175,19 @@ interface WorkflowState {
   toWorkflow: () => SerializedWorkflowDTO;
   saveWorkflow: () => Promise<boolean>;
   duplicateWorkflow: () => Promise<string | null>;
-  loadWorkflow: (workflow: SerializedWorkflowDTO) => void;
+  loadWorkflow: (workflow: SerializedWorkflowDTO, clearStack?: boolean) => void;
   clearWorkflow: () => void;
+
+  // Subflow Navigation
+  enterSubflow: (subflow: SerializedWorkflowDTO) => void;
+  exitSubflow: () => void;
+
+  // Subflow Schema Cache
+  subflowCache: Record<string, SerializedWorkflowDTO>;
+  refreshSubflowCache: (force?: boolean) => Promise<void>;
+
+  // Pipeline Parameters
+  togglePipelineParameter: (targetNodeId: string, targetSettingKey: string, settingDef: any) => void;
 }
 
 const MAX_HISTORY = 50;
@@ -171,6 +196,8 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   // Initial state
   pipelineId: null,
   pipelineName: 'Untitled Pipeline',
+  isSubflow: false,
+  pipelineParameters: [],
   nodes: [],
   edges: [],
   selectedNodeId: null,
@@ -179,6 +206,8 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   customNodeDefs: [],
   history: [],
   historyIndex: -1,
+  navigationStack: [],
+  subflowCache: {},
   isGenerating: false,
   isExecuting: false,
   isSaving: false,
@@ -307,6 +336,18 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     };
 
     set({ nodes: [...state.nodes, newNode], selectedNodeId: newNode.id, isDirty: true });
+
+    // Ensure the new node is registered in the schema engine
+    const { nodes, edges } = get();
+    useSchemaStore.getState().syncFromWorkflow(
+      nodes.map((n) => ({ id: n.id, nodeType: n.data.nodeType, settings: n.data.settings })),
+      edges.map((e) => ({ id: e.id, source: e.source, target: e.target, sourceHandle: e.sourceHandle, targetHandle: e.targetHandle })),
+    );
+
+    // If a subflow was added, we must fetch it so the schema engine can expand it
+    if (newNode.data.nodeType === 'system:subflow') {
+      get().refreshSubflowCache();
+    }
   },
 
   updateNodeSettings: (nodeId, settings) => {
@@ -318,9 +359,35 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
         : n,
     );
     set({ nodes: updatedNodes, isDirty: true });
-    // Schema propagation: recompute schema for this node and its descendants
+    
     const updatedNode = updatedNodes.find((n) => n.id === nodeId);
     if (updatedNode) {
+      if (updatedNode.data.nodeType === 'system:subflow') {
+        // A subflow node's settings (subflowId or an exposed parameter value) affect the
+        // inlined internal nodes, whose schema is only recomputed during full expansion.
+        // The incremental onNodeSettingsChanged only touches the single proxy node, so we
+        // must re-run syncFromWorkflow. If subflowId changed we may also need to fetch a
+        // newly-referenced subflow first.
+        if ('subflowId' in settings) {
+          // refreshSubflowCache re-syncs after fetching; force a re-sync even if the
+          // subflow was already cached so parameter/id changes always re-expand.
+          get().refreshSubflowCache().then(() => {
+            const { nodes, edges } = get();
+            useSchemaStore.getState().syncFromWorkflow(
+              nodes.map((n) => ({ id: n.id, nodeType: n.data.nodeType, settings: n.data.settings })),
+              edges.map((e) => ({ id: e.id, source: e.source, target: e.target, sourceHandle: e.sourceHandle, targetHandle: e.targetHandle })),
+            );
+          });
+        } else {
+          const { nodes, edges } = get();
+          useSchemaStore.getState().syncFromWorkflow(
+            nodes.map((n) => ({ id: n.id, nodeType: n.data.nodeType, settings: n.data.settings })),
+            edges.map((e) => ({ id: e.id, source: e.source, target: e.target, sourceHandle: e.sourceHandle, targetHandle: e.targetHandle })),
+          );
+        }
+        return;
+      }
+
       useSchemaStore.getState().onNodeSettingsChanged(
         nodeId,
         updatedNode.data.nodeType,
@@ -355,7 +422,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     const { nodes, edges } = get();
     useSchemaStore.getState().syncFromWorkflow(
       nodes.map((n) => ({ id: n.id, nodeType: n.data.nodeType, settings: n.data.settings })),
-      edges.map((e) => ({ id: e.id, source: e.source, target: e.target })),
+      edges.map((e) => ({ id: e.id, source: e.source, target: e.target, sourceHandle: e.sourceHandle, targetHandle: e.targetHandle })),
     );
   },
 
@@ -460,11 +527,11 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
 
   selectedCount: () => get().nodes.filter((n) => n.selected).length,
 
-  groupSelectedIntoNode: async (name) => {
+  createSubflowFromSelection: async (name) => {
     const state = get();
     const selected = state.nodes.filter((n) => n.selected);
-    if (selected.length < 2) {
-      return { ok: false, error: 'Select at least 2 nodes to group.' };
+    if (selected.length < 1) {
+      return { ok: false, error: 'Select at least 1 node to group.' };
     }
     const selectedIds = new Set(selected.map((n) => n.id));
 
@@ -479,17 +546,8 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       (e) => selectedIds.has(e.source) && !selectedIds.has(e.target),
     );
 
-    // v1 constraint: at most one external input and one external output so the
-    // composite has a clean single-in / single-out boundary.
-    if (inboundEdges.length > 1) {
-      return { ok: false, error: 'Grouped nodes may have at most one incoming connection from outside.' };
-    }
-    if (outboundEdges.length > 1) {
-      return { ok: false, error: 'Grouped nodes may have at most one outgoing connection to outside.' };
-    }
-
-    // Build the sub-workflow payload (include inlineIR for custom inner nodes).
-    const subNodes = selected.map((n) => {
+    // Build the sub-workflow payload
+    const subNodes: any[] = selected.map((n) => {
       const base = {
         id: n.id,
         type: n.data.nodeType,
@@ -503,7 +561,8 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       }
       return base;
     });
-    const subConnections = internalEdges.map((e) => ({
+
+    const subConnections: any[] = internalEdges.map((e) => ({
       id: e.id,
       sourceNodeId: e.source,
       sourcePortId: e.sourceHandle || 'out',
@@ -511,74 +570,124 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       targetPortId: e.targetHandle || 'in',
     }));
 
-    let steps;
+    // Calculate layout for subflow inputs/outputs
+    const minX = Math.min(...selected.map((n) => n.position.x));
+    const maxX = Math.max(...selected.map((n) => n.position.x));
+    const avgY = selected.reduce((sum, n) => sum + n.position.y, 0) / selected.length;
+
+    // For inbound edges, create Subflow Input nodes. Record the port name so the
+    // rewired parent edge can carry it as its targetHandle (multi-input support).
+    const inboundMapping = new Map<string, string>(); // Original edge ID -> inputName (port id)
+    inboundEdges.forEach((e, i) => {
+      const inputId = `node_${nanoid(8)}`;
+      const inputName = `Input ${i + 1}`;
+      inboundMapping.set(e.id, inputName);
+      subNodes.push({
+        id: inputId,
+        type: 'system:subflow-input',
+        settings: { inputName },
+        position: { x: minX - 300, y: avgY + (i * 100) },
+        label: inputName,
+      });
+      subConnections.push({
+        id: `edge_${nanoid(8)}`,
+        sourceNodeId: inputId,
+        sourcePortId: 'out',
+        targetNodeId: e.target,
+        targetPortId: e.targetHandle || 'in',
+      });
+    });
+
+    // For outbound edges, create Subflow Output nodes. Record the port name so the
+    // rewired parent edge can carry it as its sourceHandle (multi-output support).
+    const outboundMapping = new Map<string, string>(); // Original edge ID -> outputName (port id)
+    outboundEdges.forEach((e, i) => {
+      const outputId = `node_${nanoid(8)}`;
+      const outputName = `Output ${i + 1}`;
+      outboundMapping.set(e.id, outputName);
+      subNodes.push({
+        id: outputId,
+        type: 'system:subflow-output',
+        settings: { outputName },
+        position: { x: maxX + 300, y: avgY + (i * 100) },
+        label: outputName,
+      });
+      subConnections.push({
+        id: `edge_${nanoid(8)}`,
+        sourceNodeId: e.source,
+        sourcePortId: e.sourceHandle || 'out',
+        targetNodeId: outputId,
+        targetPortId: 'in',
+      });
+    });
+
+    // Save the subflow to the DB
+    let createdSubflow;
     try {
-      const res = await api.compileSubgraph({ nodes: subNodes, connections: subConnections });
-      steps = res.steps;
+      createdSubflow = await api.createPipeline({
+        name: name.trim() || 'Subflow',
+        isSubflow: true,
+        nodes: subNodes,
+        connections: subConnections,
+      });
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
-    if (!steps || steps.length === 0) {
-      return { ok: false, error: 'Could not compile the selected nodes.' };
-    }
 
-    // Persist the composite definition.
-    const def: CustomNodeDef = {
-      id: `${CUSTOM_NODE_PREFIX}${nanoid(8)}`,
-      name: name.trim() || 'Grouped Node',
-      description: `Composite of ${selected.length} nodes`,
-      icon: 'box',
-      kind: 'composite',
-      steps: steps.map((s) => ({
-        operation: s.operation,
-        stepType: s.stepType,
-        params: s.params,
-        imports: s.imports,
-        label: s.label,
-      })),
-      createdAt: new Date().toISOString(),
-    };
-    get().upsertCustomNode(def);
-
-    // Replace the selected nodes with a single composite instance.
+    // Replace the selected nodes with a single subflow node in the parent
     state.pushHistory();
     const avgX = selected.reduce((sum, n) => sum + n.position.x, 0) / selected.length;
-    const avgY = selected.reduce((sum, n) => sum + n.position.y, 0) / selected.length;
-    const compositeId = `node_${nanoid(8)}`;
-    const compositeNode: Node<NodeData> = {
-      id: compositeId,
-      type: 'custom',
+    
+    const subflowNodeId = `node_${nanoid(8)}`;
+    const subflowNode: Node<NodeData> = {
+      id: subflowNodeId,
+      type: 'custom', // Render as custom node for generic styling
       position: { x: avgX, y: avgY },
       data: {
-        label: def.name,
-        nodeType: def.id,
+        label: createdSubflow.metadata.name,
+        nodeType: 'system:subflow',
         category: 'custom',
-        icon: def.icon,
-        settings: {},
+        icon: 'boxes',
+        settings: { subflowId: createdSubflow.metadata.id },
       },
     };
 
-    // Rewire boundary edges to the new node; drop internal + old nodes.
+    // Rewire boundary edges to the new subflow node
     const remainingNodes = state.nodes.filter((n) => !selectedIds.has(n.id));
     const rewiredEdges: Edge[] = [];
+    
     for (const e of state.edges) {
       if (internalEdges.includes(e)) continue;
       if (selectedIds.has(e.source) && selectedIds.has(e.target)) continue;
+      
       if (selectedIds.has(e.target)) {
-        rewiredEdges.push({ ...e, target: compositeId, targetHandle: 'in' });
+        // Inbound edge → connects to the proxy on the port named after the matching
+        // subflow-input (falls back to 'in' for single-input compatibility).
+        rewiredEdges.push({ ...e, target: subflowNodeId, targetHandle: inboundMapping.get(e.id) || 'in' });
       } else if (selectedIds.has(e.source)) {
-        rewiredEdges.push({ ...e, source: compositeId, sourceHandle: 'out' });
+        // Outbound edge → leaves the proxy on the port named after the matching
+        // subflow-output (falls back to 'out').
+        rewiredEdges.push({ ...e, source: subflowNodeId, sourceHandle: outboundMapping.get(e.id) || 'out' });
       } else {
         rewiredEdges.push(e);
       }
     }
 
     set({
-      nodes: [...remainingNodes, compositeNode],
+      nodes: [...remainingNodes, subflowNode],
       edges: rewiredEdges,
-      selectedNodeId: compositeId,
+      selectedNodeId: subflowNodeId,
       isDirty: true,
     });
+
+    const { nodes, edges } = get();
+    useSchemaStore.getState().syncFromWorkflow(
+      nodes.map((n) => ({ id: n.id, nodeType: n.data.nodeType, settings: n.data.settings })),
+      edges.map((e) => ({ id: e.id, source: e.source, target: e.target, sourceHandle: e.sourceHandle, targetHandle: e.targetHandle })),
+    );
+
+    // Fetch the newly created subflow so it can be expanded for schema propagation
+    get().refreshSubflowCache();
 
     return { ok: true };
   },
@@ -632,7 +741,13 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       if (state.pipelineId) {
         await api.updatePipeline(state.pipelineId, workflow);
       } else {
-        const created = await api.createPipeline({ name: state.pipelineName, nodes: workflow.nodes, connections: workflow.connections });
+        const created = await api.createPipeline({
+          name: state.pipelineName,
+          isSubflow: workflow.metadata.isSubflow,
+          parameters: workflow.metadata.parameters,
+          nodes: workflow.nodes,
+          connections: workflow.connections,
+        });
         set({ pipelineId: created.metadata.id });
       }
       state.markSaved();
@@ -653,10 +768,12 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     try {
       const workflow = state.toWorkflow();
       const newName = state.pipelineName.includes('Copy') ? state.pipelineName : `${state.pipelineName} (Copy)`;
-      const created = await api.createPipeline({ 
-        name: newName, 
-        nodes: workflow.nodes, 
-        connections: workflow.connections 
+      const created = await api.createPipeline({
+        name: newName,
+        isSubflow: workflow.metadata.isSubflow,
+        parameters: workflow.metadata.parameters,
+        nodes: workflow.nodes,
+        connections: workflow.connections
       });
       // Switch context to the newly created pipeline
       set({ 
@@ -685,6 +802,8 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
         name: state.pipelineName,
         createdAt: now,
         updatedAt: now,
+        isSubflow: state.isSubflow,
+        parameters: state.pipelineParameters,
       },
       nodes: state.nodes.map((n) => {
         const base = {
@@ -714,8 +833,13 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     };
   },
 
-  loadWorkflow: (workflow) => {
+  loadWorkflow: (workflow, clearStack = true) => {
     const state = get();
+    // Determine the active nodes and edges.
+    // If navigationStack has items, we're inside a subflow, so don't overwrite
+    // the UI with the root workflow, just update the store's "pipelineId".
+    // Wait, loadWorkflow is typically called when opening from the Toolbar,
+    // which should clear the navigationStack.
     const nodes: Node<NodeData>[] = workflow.nodes.map((n) => {
       const def = state.nodeDefinitions.find((d) => d.type === n.type);
       return {
@@ -740,22 +864,62 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       targetHandle: c.targetPortId,
     }));
 
-    set({
+    set((state) => ({
       pipelineId: workflow.metadata.id,
       pipelineName: workflow.metadata.name,
+      isSubflow: workflow.metadata.isSubflow || false,
+      pipelineParameters: workflow.metadata.parameters || [],
       nodes,
       edges,
       selectedNodeId: null,
       history: [],
       historyIndex: -1,
+      navigationStack: clearStack ? [] : state.navigationStack,
       isDirty: false,
-    });
+      lastSavedAt: workflow.metadata.updatedAt,
+    }));
+    
+    // Fetch all subflows recursively to populate the cache
+    get().refreshSubflowCache();
+  },
 
-    // Schema propagation: rebuild the schema engine for the loaded workflow
-    useSchemaStore.getState().syncFromWorkflow(
-      nodes.map((n) => ({ id: n.id, nodeType: n.data.nodeType, settings: n.data.settings })),
-      edges.map((e) => ({ id: e.id, source: e.source, target: e.target })),
-    );
+  refreshSubflowCache: async (force = false) => {
+    const { nodes } = get();
+    const subflowNodes = nodes.filter(n => n.data?.nodeType === 'system:subflow');
+    if (subflowNodes.length === 0) return;
+
+    // Fetch all needed subflows
+    const cache = { ...get().subflowCache };
+    let hasNew = false;
+    
+    for (const node of subflowNodes) {
+      const subflowId = node.data?.settings?.subflowId as string;
+      if (subflowId && (force || !cache[subflowId])) {
+        try {
+          const subflow = await api.getPipeline(subflowId);
+          if (subflow) {
+            cache[subflowId] = subflow;
+            hasNew = true;
+          }
+        } catch (e) {
+          console.error(`Failed to fetch subflow ${subflowId}`, e);
+        }
+      }
+    }
+
+    if (hasNew) {
+      set({ subflowCache: cache });
+      // Tell schema store to re-sync now that cache is updated
+      const { nodes: currentNodes, edges: currentEdges } = get();
+      useSchemaStore.getState().syncFromWorkflow(
+        currentNodes.map(n => ({
+          id: n.id,
+          nodeType: n.data.nodeType,
+          settings: n.data.settings
+        })),
+        currentEdges.map(e => ({ id: e.id, source: e.source, target: e.target, sourceHandle: e.sourceHandle, targetHandle: e.targetHandle }))
+      );
+    }
   },
 
   clearWorkflow: () => {
@@ -775,4 +939,85 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     // Schema propagation: clear all schema state
     useSchemaStore.getState().clearSchemas();
   },
+
+  // === Subflow Navigation ====================================================
+
+  enterSubflow: (subflow) => {
+    const state = get();
+    // 1. Save current state to navigation stack
+    const currentEntry: NavigationStackEntry = {
+      pipelineId: state.pipelineId,
+      pipelineName: state.pipelineName,
+      nodes: state.nodes,
+      edges: state.edges,
+      history: state.history,
+      historyIndex: state.historyIndex,
+    };
+
+    set({
+      navigationStack: [...state.navigationStack, currentEntry],
+    });
+
+    // 2. Load the subflow
+    get().loadWorkflow(subflow, false);
+  },
+
+  exitSubflow: () => {
+    const state = get();
+    if (state.navigationStack.length === 0) return;
+
+    // 1. Pop the last entry
+    const stack = [...state.navigationStack];
+    const parentEntry = stack.pop()!;
+
+    // 2. Restore state
+    set({
+      navigationStack: stack,
+      pipelineId: parentEntry.pipelineId,
+      pipelineName: parentEntry.pipelineName,
+      nodes: parentEntry.nodes,
+      edges: parentEntry.edges,
+      history: parentEntry.history,
+      historyIndex: parentEntry.historyIndex,
+      selectedNodeId: null,
+      isDirty: false, // Could compute this if we wanted to retain parent dirty state
+    });
+
+    // 3. Sync schema propagation
+    useSchemaStore.getState().syncFromWorkflow(
+      parentEntry.nodes.map((n) => ({ id: n.id, nodeType: n.data.nodeType, settings: n.data.settings })),
+      parentEntry.edges.map((e) => ({ id: e.id, source: e.source, target: e.target, sourceHandle: e.sourceHandle, targetHandle: e.targetHandle }))
+    );
+
+    // 4. Force refresh subflow cache so parent sees our saved changes
+    get().refreshSubflowCache(true);
+  },
+
+  togglePipelineParameter: (targetNodeId, targetSettingKey, settingDef) => {
+    const state = get();
+    const existing = state.pipelineParameters.findIndex(
+      p => p.targetNodeId === targetNodeId && p.targetSettingKey === targetSettingKey
+    );
+
+    let newParams;
+    if (existing >= 0) {
+      newParams = state.pipelineParameters.filter((_, i) => i !== existing);
+    } else {
+      // Map SettingType to ISubflowParameter type
+      let type: 'string' | 'number' | 'boolean' | 'enum' = 'string';
+      if (settingDef.type === 'number') type = 'number';
+      if (settingDef.type === 'boolean') type = 'boolean';
+      if (settingDef.type === 'select' || settingDef.type === 'multi-select') type = 'enum';
+
+      const newParam = {
+        id: `param_${nanoid(6)}`,
+        name: settingDef.label,
+        type,
+        targetNodeId,
+        targetSettingKey,
+      };
+      newParams = [...state.pipelineParameters, newParam];
+    }
+    set({ pipelineParameters: newParams });
+  }
 }));

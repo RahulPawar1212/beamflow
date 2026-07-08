@@ -2,6 +2,18 @@
 
 This document outlines the system architecture, design patterns, and data flow of **BeamFlow**, an open-source visual pipeline builder for Apache Beam.
 
+### Related documents
+- [schema-propagation.md](schema-propagation.md) — design-time schema/column inference engine.
+- [subflows.md](subflows.md) — reusable nested pipelines (grouping, expansion, parameters, port mapping).
+- [db-auth-architecture.md](db-auth-architecture.md) — SQL persistence (Drizzle/SQLite/Postgres) & user auth.
+- [architecture-and-troubleshooting.md](architecture-and-troubleshooting.md) — preview caching & debugging.
+- [apache-beam-execution-model.md](apache-beam-execution-model.md), [plugin-guide.md](plugin-guide.md).
+
+> **Note:** the Storage & Execution section below predates the SQL backend. Workflows are
+> now persisted through Drizzle to SQLite (default) or PostgreSQL, not local JSON files —
+> see [db-auth-architecture.md](db-auth-architecture.md). The `IStorage` decoupling still
+> holds; only the shipped adapter changed.
+
 ---
 
 ## 🏛️ Architectural Overview

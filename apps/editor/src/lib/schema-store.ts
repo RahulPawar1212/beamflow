@@ -34,6 +34,7 @@ import type {
   SchemaChangeEvent,
 } from '@beamflow/schema';
 import { registerBuiltinSchemaNodes } from '@beamflow/nodes';
+import { useWorkflowStore } from '../store/workflow-store';
 
 // ─── One-time registration of built-in schema node factories ─────────────────
 // This runs once when the module is first imported.
@@ -53,6 +54,10 @@ export interface WorkflowEdge {
   id: string;
   source: string;
   target: string;
+  /** React Flow source handle — used to match subflow output ports by name. */
+  sourceHandle?: string | null;
+  /** React Flow target handle — used to match subflow input ports by name. */
+  targetHandle?: string | null;
 }
 
 /** Shape of a workflow node (simplified from React Flow). */
@@ -121,14 +126,129 @@ interface SchemaStoreState {
 
 const engine = new SchemaPropagationEngine();
 
+function expandNodesAndEdgesForSchema(
+  nodes: WorkflowNode[],
+  edges: WorkflowEdge[],
+  subflowCache: Record<string, any>
+): { expandedNodes: WorkflowNode[], expandedEdges: WorkflowEdge[] } {
+  const expandedNodes = [...nodes];
+  const expandedEdges = [...edges];
+
+  let hasSubflows = true;
+  let depth = 0;
+  while (hasSubflows) {
+    if (depth++ > 10) break; // prevent infinite loops
+    hasSubflows = false;
+    
+    // Find a subflow node that hasn't been expanded yet.
+    // We can just find any system:subflow that doesn't have an internal proxy yet.
+    // Actually, to make it easier, let's change the type of the expanded subflow node 
+    // to 'system:subflow-proxy' so we don't process it again.
+    const subflowNodeIndex = expandedNodes.findIndex(n => n.nodeType === 'system:subflow');
+    if (subflowNodeIndex === -1) break;
+    hasSubflows = true;
+
+    const subflowNode = expandedNodes[subflowNodeIndex];
+    // Change type to proxy so it's not expanded again
+    subflowNode.nodeType = 'system:subflow-proxy';
+    
+    const subflowId = subflowNode.settings?.subflowId as string;
+    const subflowDef = subflowId ? subflowCache[subflowId] : null;
+
+    if (!subflowDef) {
+      // If we don't have the definition, just leave it as a proxy that outputs nothing
+      continue;
+    }
+
+    const prefix = `sub_${subflowNode.id}_`;
+    
+    // Map internal nodes
+    const internalNodes = subflowDef.nodes.map((n: any) => {
+      // Substitute parameters!
+      const mappedSettings = { ...n.settings };
+      if (subflowDef.metadata?.parameters) {
+        for (const param of subflowDef.metadata.parameters) {
+          if (param.targetNodeId === n.id && subflowNode.settings && param.id in subflowNode.settings) {
+            mappedSettings[param.targetSettingKey] = subflowNode.settings[param.id];
+          }
+        }
+      }
+      return {
+        id: prefix + n.id,
+        nodeType: n.type,
+        settings: mappedSettings,
+      };
+    });
+
+    // Map internal edges
+    const internalEdges = subflowDef.connections.map((c: any) => ({
+      id: prefix + c.id,
+      source: prefix + c.sourceNodeId,
+      target: prefix + c.targetNodeId,
+    }));
+
+    expandedNodes.push(...internalNodes);
+    expandedEdges.push(...internalEdges);
+
+    const inputNodes = internalNodes.filter((n: any) => n.nodeType === 'system:subflow-input');
+    const outputNodes = internalNodes.filter((n: any) => n.nodeType === 'system:subflow-output');
+
+    // Build name → internal node id maps for port matching. The parent edge's handle
+    // carries the boundary port name (see createSubflowFromSelection); older single-IO
+    // subflows have no name match and fall back to index 0.
+    const inputByName = new Map<string, string>();
+    inputNodes.forEach((n: any) => {
+      const name = (n.settings?.inputName as string) ?? '';
+      if (name) inputByName.set(name, n.id);
+    });
+    const outputByName = new Map<string, string>();
+    outputNodes.forEach((n: any) => {
+      const name = (n.settings?.outputName as string) ?? '';
+      if (name) outputByName.set(name, n.id);
+    });
+
+    // Rewire incoming edges Parent -> subflowNode  TO  Parent -> matching subflow-input.
+    if (inputNodes.length > 0) {
+      for (const e of expandedEdges) {
+        if (e.target === subflowNode.id) {
+          const byName = e.targetHandle ? inputByName.get(e.targetHandle) : undefined;
+          e.target = byName ?? inputNodes[0].id;
+        }
+      }
+    }
+
+    // Rewire outgoing edges: each internal subflow-output -> subflowNode (proxy) on a
+    // handle equal to its output name, so downstream parent edges can match by sourceHandle.
+    for (const outNode of outputNodes) {
+      const outName = (outNode.settings?.outputName as string) ?? '';
+      expandedEdges.push({
+        id: `proxy_${subflowNode.id}_${outNode.id}`,
+        source: outNode.id,
+        target: subflowNode.id,
+        sourceHandle: null,
+        targetHandle: outName || null,
+      });
+    }
+    // The proxy node forwards each named input to the parent's downstream edges. Since
+    // the schema engine is single-output per node, downstream matching is name-agnostic
+    // here (all outputs merge through the passthrough proxy); the important part is that
+    // the schema reaches the proxy at all. Runtime/codegen handles per-port fan-out.
+  }
+
+  return { expandedNodes, expandedEdges };
+}
+
 export const useSchemaStore = create<SchemaStoreState>((set, get) => {
   // Subscribe to engine change events and update the Zustand store
   engine.subscribe((event: SchemaChangeEvent) => {
     const { schemas } = get();
+    // Use 'system:subflow' for the proxy so it builds the right schema node
+    const actualNodeType = nodeTypeMap.get(event.nodeId) === 'system:subflow-proxy' 
+      ? 'system:subflow' 
+      : (nodeTypeMap.get(event.nodeId) ?? '');
+
     const schemaNode = schemaNodeRegistry.create(
-      // We need node type to run validateSchema — look it up from our local map
-      // (populated during syncFromWorkflow)
-      nodeTypeMap.get(event.nodeId) ?? '',
+      actualNodeType,
       event.nodeId,
       nodeSettingsMap.get(event.nodeId) ?? {},
     );
@@ -171,10 +291,34 @@ export const useSchemaStore = create<SchemaStoreState>((set, get) => {
       nodeSettingsMap.clear();
       edgeMap.length = 0;
 
+      // Import workflow-store here to avoid circular dependency
+      // or just pull it from the global window object if possible.
+      // Wait, we can't easily access subflowCache without circular deps if not careful.
+      // Let's import it dynamically or just let caller pass subflowCache?
+      // Since syncFromWorkflow is called from workflow-store, workflow-store can't easily pass it.
+      // Actually, we can import useWorkflowStore.
+      const subflowCache = useWorkflowStore.getState().subflowCache;
+
+      const { expandedNodes, expandedEdges } = expandNodesAndEdgesForSchema(
+        JSON.parse(JSON.stringify(nodes)),
+        JSON.parse(JSON.stringify(edges)),
+        subflowCache
+      );
+
       // Register all nodes
-      for (const node of nodes) {
+      for (const node of expandedNodes) {
         nodeTypeMap.set(node.id, node.nodeType);
         nodeSettingsMap.set(node.id, node.settings);
+
+        // Map proxy back to generic custom/passthrough behavior
+        if (node.nodeType === 'system:subflow-proxy') {
+          engine.registerNode({
+            nodeId: node.id,
+            getOutputSchema: (inputs) => inputs[0] ?? emptySchema(),
+            validateSchema: () => [],
+          });
+          continue;
+        }
 
         const schemaNode = schemaNodeRegistry.create(node.nodeType, node.id, node.settings);
         if (schemaNode) {
@@ -190,7 +334,7 @@ export const useSchemaStore = create<SchemaStoreState>((set, get) => {
       }
 
       // Register all edges
-      for (const edge of edges) {
+      for (const edge of expandedEdges) {
         engine.addEdge(edge.source, edge.target);
         edgeMap.push([edge.source, edge.target]);
       }

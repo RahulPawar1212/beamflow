@@ -1,0 +1,1 @@
+ALTER TABLE `workflows` ADD `is_subflow` integer DEFAULT 0 NOT NULL;

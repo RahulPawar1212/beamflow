@@ -22,6 +22,8 @@ import { RenameSchemaNode } from './rename.schema.js';
 import { AggregateSchemaNode } from './aggregate.schema.js';
 import { JoinSchemaNode } from './join.schema.js';
 import { UnionSchemaNode } from './union.schema.js';
+import { SubflowInputSchemaNode } from './subflow-input.schema.js';
+import { SubflowPassthroughSchemaNode } from './subflow-passthrough.schema.js';
 
 /**
  * Register all built-in schema node factories with a SchemaNodeRegistry.
@@ -76,6 +78,19 @@ export function registerBuiltinSchemaNodes(registry: SchemaNodeRegistry): void {
     'beamflow:union',
     (nodeId, settings) => new UnionSchemaNode(nodeId, settings),
   );
+  registry.register(
+    'system:subflow-input',
+    (nodeId, settings) => new SubflowInputSchemaNode(nodeId, settings),
+  );
+  // Subflow output and the subflow proxy itself simply forward upstream schema.
+  registry.register(
+    'system:subflow-output',
+    (nodeId, settings) => new SubflowPassthroughSchemaNode(nodeId, settings),
+  );
+  registry.register(
+    'system:subflow',
+    (nodeId, settings) => new SubflowPassthroughSchemaNode(nodeId, settings),
+  );
 }
 
 // Re-export all schema node classes for direct use
@@ -98,3 +113,5 @@ export type { AggregationDef } from './aggregate.schema.js';
 
 export { JoinSchemaNode } from './join.schema.js';
 export { UnionSchemaNode } from './union.schema.js';
+export { SubflowInputSchemaNode } from './subflow-input.schema.js';
+export { SubflowPassthroughSchemaNode } from './subflow-passthrough.schema.js';

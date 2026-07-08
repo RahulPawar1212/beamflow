@@ -408,6 +408,36 @@ function getAggregationFunction(
 
 // ─── Main Generator ─────────────────────────────────────────────────────────
 
+registerOperationHandler('SubflowInput', (step, emitter, ctx) => {
+  const varName = ctx.varNames.get(step.id)!;
+  const inputVar = ctx.varNames.get(step.inputs[0]);
+  
+  if (!inputVar) {
+    emitter.comment(`WARNING: SubflowInput ${step.label} has no input. Mocking for preview.`);
+    emitter.line(`${varName} = pipeline | "${step.id}_MockInput" >> beam.Create([])`);
+    return;
+  }
+  
+  emitter.blank();
+  emitter.comment(`Subflow Input: ${step.label}`);
+  emitter.line(`${varName} = ${inputVar}`);
+});
+
+registerOperationHandler('SubflowOutput', (step, emitter, ctx) => {
+  const varName = ctx.varNames.get(step.id)!;
+  const inputVar = ctx.varNames.get(step.inputs[0]);
+  
+  if (!inputVar) {
+    emitter.comment(`WARNING: SubflowOutput ${step.label} has no input. Mocking for preview.`);
+    emitter.line(`${varName} = pipeline | "${step.id}_MockOutput" >> beam.Create([])`);
+    return;
+  }
+  
+  emitter.blank();
+  emitter.comment(`Subflow Output: ${step.label}`);
+  emitter.line(`${varName} = ${inputVar}`);
+});
+
 /**
  * Generate Apache Beam Python code from an IR pipeline.
  *

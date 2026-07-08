@@ -6,11 +6,16 @@ import type { SerializedWorkflow } from '@beamflow/shared';
 const workflowsTable = isPostgres ? pgWorkflows : sqliteWorkflows;
 
 export const workflowsRepo = {
-  async list(ownerId: string): Promise<SerializedWorkflow[]> {
+  async list(ownerId: string, options?: { includeSubflows?: boolean }): Promise<SerializedWorkflow[]> {
+    const conditions = [eq(workflowsTable.ownerId, ownerId)];
+    if (!options?.includeSubflows) {
+      conditions.push(eq(workflowsTable.isSubflow, 0));
+    }
+
     const results = await db
       .select()
       .from(workflowsTable)
-      .where(eq(workflowsTable.ownerId, ownerId));
+      .where(and(...conditions));
     
     return results.map((row: any) => JSON.parse(row.settingsJson));
   },
@@ -39,6 +44,7 @@ export const workflowsRepo = {
       name: workflow.metadata.name,
       description: workflow.metadata.description || '',
       settingsJson: JSON.stringify(workflow),
+      isSubflow: workflow.metadata.isSubflow ? 1 : 0,
       createdAt: now,
       updatedAt: now,
     });
@@ -52,6 +58,7 @@ export const workflowsRepo = {
         name: workflow.metadata.name,
         description: workflow.metadata.description || '',
         settingsJson: JSON.stringify(workflow),
+        isSubflow: workflow.metadata.isSubflow ? 1 : 0,
         updatedAt: now,
       })
       .where(

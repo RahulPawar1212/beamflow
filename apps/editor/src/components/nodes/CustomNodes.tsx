@@ -111,6 +111,82 @@ function BaseNode({ id, data, selected }: NodeProps) {
   const hasInputs = def?.ports.some((p: { direction: string }) => p.direction === 'input') ?? false;
   const hasOutputs = def?.ports.some((p: { direction: string }) => p.direction === 'output') ?? false;
 
+  // For subflow proxy nodes, derive one handle per named boundary port from the
+  // referenced subflow definition so multi-input/output subflows are wired correctly.
+  const subflowCache = useWorkflowStore((s: { subflowCache: Record<string, any> }) => s.subflowCache);
+  const isSubflow = nodeData.nodeType === 'system:subflow';
+  const subflowDef = isSubflow ? subflowCache[nodeData.settings?.subflowId as string] : null;
+  const inputPortNames: string[] = subflowDef
+    ? (subflowDef.nodes as any[])
+        .filter((n) => n.type === 'system:subflow-input')
+        .map((n) => (n.settings?.inputName as string) || 'Input')
+    : [];
+  const outputPortNames: string[] = subflowDef
+    ? (subflowDef.nodes as any[])
+        .filter((n) => n.type === 'system:subflow-output')
+        .map((n) => (n.settings?.outputName as string) || 'Output')
+    : [];
+  const useNamedPorts = isSubflow && subflowDef && (inputPortNames.length > 1 || outputPortNames.length > 1);
+
+  const handleClass =
+    '!w-3.5 !h-3.5 !border-2 !bg-slate-300 !border-slate-500 transition-transform hover:!scale-125';
+
+  if (useNamedPorts) {
+    return (
+      <div
+        className={`
+          group/node relative w-[260px] overflow-hidden rounded-2xl border backdrop-blur-sm
+          transition-all duration-200 cursor-pointer
+          ${colors.bg} ${colors.border}
+          ${
+            selected
+              ? `ring-2 ring-offset-2 ring-offset-[var(--color-surface-50)] ring-indigo-400 shadow-xl ${colors.glow} -translate-y-0.5`
+              : 'shadow-sm hover:shadow-lg hover:-translate-y-0.5'
+          }
+        `}
+        onClick={() => setSelected(id)}
+      >
+        <div className={`h-1.5 w-full bg-gradient-to-r ${colors.bar}`} />
+
+        {/* Named input handles */}
+        {inputPortNames.map((name, i) => (
+          <Handle
+            key={`in-${name}`}
+            type="target"
+            position={Position.Left}
+            id={name}
+            style={{ top: `${((i + 1) / (inputPortNames.length + 1)) * 100}%` }}
+            className={handleClass}
+          />
+        ))}
+
+        <div className="px-4 py-3.5">
+          <div className="flex items-center gap-3">
+            <div className={`flex-shrink-0 p-2.5 rounded-xl bg-gradient-to-br ring-1 ${colors.chip} ${colors.accent}`}>
+              <Icon size={22} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-[15px] font-semibold text-gray-200 truncate leading-tight">{nodeData.label}</div>
+              <div className="text-[11px] text-gray-500 capitalize tracking-wide mt-0.5">{nodeData.category}</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Named output handles */}
+        {outputPortNames.map((name, i) => (
+          <Handle
+            key={`out-${name}`}
+            type="source"
+            position={Position.Right}
+            id={name}
+            style={{ top: `${((i + 1) / (outputPortNames.length + 1)) * 100}%` }}
+            className={handleClass}
+          />
+        ))}
+      </div>
+    );
+  }
+
   return (
     <div
       className={`

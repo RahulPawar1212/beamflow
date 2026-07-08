@@ -15,6 +15,13 @@
       "when": 1783446823279,
       "tag": "0001_panoramic_blur",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1783449036153,
+      "tag": "0002_elite_lake",
+      "breakpoints": true
     }
   ]
 }

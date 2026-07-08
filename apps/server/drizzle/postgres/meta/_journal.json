@@ -15,6 +15,13 @@
       "when": 1783446863826,
       "tag": "0001_small_manta",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1783449033965,
+      "tag": "0002_brainy_frog_thor",
+      "breakpoints": true
     }
   ]
 }

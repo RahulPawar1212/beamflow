@@ -92,8 +92,8 @@ export const api = {
 
   // Pipelines
   listPipelines: () => request<{ pipelines: PipelineSummary[] }>('/pipelines'),
-  getPipeline: (id: string) => request<SerializedWorkflowDTO>(`/pipelines/${seg(id)}`),
-  createPipeline: (data: { name?: string; description?: string; nodes?: any[]; connections?: any[] }) =>
+  getPipeline: (id: string) => request<SerializedWorkflowDTO>(`/pipelines/${seg(id)}`, { cache: 'no-store' }),
+  createPipeline: (data: { name?: string; description?: string; isSubflow?: boolean; parameters?: any[]; nodes?: any[]; connections?: any[] }) =>
     request<SerializedWorkflowDTO>('/pipelines', {
       method: 'POST',
       body: JSON.stringify(data),
@@ -122,6 +122,19 @@ export const api = {
     request<{ message: string }>(`/pipelines/${seg(pipelineId)}/nodes/${seg(nodeId)}/preview`, {
       method: 'POST',
     }),
+  /**
+   * Build the preview target id for a node that lives *inside* an expanded subflow.
+   * The server's `expandSubflows` re-ids internal nodes as `sub_<subflowInstanceId>_<origId>`
+   * (and nests for deeper subflows). Passing this id to `triggerPreview`/`getPreview` targets
+   * the internal node. `subflowInstanceIds` is the chain of proxy node ids from the outermost
+   * parent inward; `internalNodeId` is the node's original id within the innermost subflow.
+   *
+   * NOTE: the canvas does not yet support selecting internal subflow nodes, so nothing calls
+   * this today. It exists so a future "drill into subflow" feature can preview internal nodes
+   * without re-deriving the server's prefixing scheme. Keep in sync with `expandSubflows`.
+   */
+  internalPreviewId: (subflowInstanceIds: string[], internalNodeId: string) =>
+    subflowInstanceIds.map((id) => `sub_${id}_`).join('') + internalNodeId,
   cancelPreview: (pipelineId: string, nodeId: string) =>
     request<void>(`/pipelines/${seg(pipelineId)}/nodes/${seg(nodeId)}/preview`, {
       method: 'DELETE',
@@ -303,6 +316,7 @@ export interface PipelineSummary {
   id: string;
   name: string;
   description?: string;
+  isSubflow?: boolean;
   createdAt: string;
   updatedAt: string;
   nodeCount: number;
@@ -321,8 +335,10 @@ export interface SerializedWorkflowDTO {
     id: string;
     name: string;
     description?: string;
+    isSubflow?: boolean;
     createdAt: string;
     updatedAt: string;
+    parameters?: any[];
   };
   nodes: CompileNode[];
   connections: CompileConnection[];

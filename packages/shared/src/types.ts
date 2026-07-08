@@ -261,6 +261,24 @@ export interface IWorkflowMetadata {
   readonly author?: string;
   /** Workflow tags. */
   readonly tags?: string[];
+  /** Whether this workflow is meant to be used as a nested subflow. */
+  readonly isSubflow?: boolean;
+  /** Exposed parameters from internal nodes when used as a subflow. */
+  readonly parameters?: ReadonlyArray<ISubflowParameter>;
+}
+
+/** Definition of a parameter exposed from a subflow's internal node. */
+export interface ISubflowParameter {
+  /** Unique parameter ID, e.g. param_1 */
+  readonly id: string;
+  /** Human-readable parameter name */
+  readonly name: string;
+  /** Data type of the parameter */
+  readonly type: 'string' | 'number' | 'boolean' | 'enum';
+  /** The internal node ID to inject the value into */
+  readonly targetNodeId: string;
+  /** The setting key on the internal node */
+  readonly targetSettingKey: string;
 }
 
 /** Complete workflow document (nodes + connections + metadata). */

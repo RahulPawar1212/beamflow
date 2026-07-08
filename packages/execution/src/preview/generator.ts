@@ -96,9 +96,18 @@ export function generatePreviewPipeline(
   });
 
   // 4. Append the Preview Sink IR step
-  // Since buildIR maps node output to its ID (or custom internal ID), 
-  // and the target node is a leaf in this truncated DAG, its final step is the last step in ir.steps.
-  const targetOutputStepId = ir.steps[ir.steps.length - 1].id;
+  // buildIR maps a built-in node's output to a step whose id === node.id, and a
+  // composite/custom node's output to its LAST internal step (`${node.id}__s<n>`).
+  // We must resolve the target node's output step explicitly rather than assuming
+  // it is the last step in ir.steps — in a multi-branch DAG the target's step is
+  // not necessarily last, which would attach the preview sink to a sibling branch.
+  if (ir.steps.length === 0) {
+    throw new Error(`Preview pipeline for ${targetNodeId} produced no IR steps`);
+  }
+  const exactStep = ir.steps.find(s => s.id === targetNodeId);
+  // For composite nodes the output is the last `${targetNodeId}__s<n>` step.
+  const compositeStep = [...ir.steps].reverse().find(s => s.id.startsWith(`${targetNodeId}__s`));
+  const targetOutputStepId = (exactStep ?? compositeStep ?? ir.steps[ir.steps.length - 1]).id;
   const previewStepId = `${targetNodeId}__preview_sink`;
   
   ir.steps.push({

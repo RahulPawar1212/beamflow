@@ -22,6 +22,7 @@ export const sqliteWorkflows = sqliteTable('workflows', {
   name: text('name').notNull(),
   description: text('description').notNull().default(''),
   settingsJson: text('settings_json').notNull(), // Serialized JSON string
+  isSubflow: integer('is_subflow').notNull().default(0), // 0 or 1
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
 });
@@ -69,6 +70,7 @@ export const pgWorkflows = pgTable('workflows', {
   name: pgText('name').notNull(),
   description: pgText('description').notNull().default(''),
   settingsJson: pgText('settings_json').notNull(), // Serialized JSON string
+  isSubflow: pgInteger('is_subflow').notNull().default(0), // 0 or 1
   createdAt: pgText('created_at').notNull(),
   updatedAt: pgText('updated_at').notNull(),
 });

@@ -210,7 +210,7 @@ export function Toolbar() {
 
   return (
     <>
-      <div className="h-12 glass flex items-center px-3 sm:px-5 gap-2 border-b border-[var(--color-border)] z-10">
+      <div className="h-12 glass flex items-center px-3 sm:px-5 gap-2 border-b border-[var(--color-border)] z-10 overflow-x-auto">
         {/* Logo */}
         <div className="flex items-center gap-2 mr-1 sm:mr-3 shrink-0">
           <Zap size={18} className="text-indigo-400" />
@@ -219,20 +219,19 @@ export function Toolbar() {
           </span>
         </div>
 
-        {/* Pipeline name */}
-        <div className="flex items-center gap-1.5 min-w-0 flex-shrink">
+        {/* Pipeline name — shrinks first and truncates so it never collides
+            with the action group on narrow (laptop) screens. */}
+        <div className="flex items-center gap-1.5 min-w-0 flex-1">
           <input
             type="text"
             value={pipelineName}
             onChange={(e) => setPipelineName(e.target.value)}
             spellCheck={false}
-            className="text-sm bg-transparent border border-transparent rounded-md px-1.5 py-0.5 outline-none text-[var(--color-text-secondary)] hover:border-[var(--color-border)] focus:border-indigo-500/50 focus:text-[var(--color-text-primary)] w-full min-w-[80px] max-w-[280px] font-medium transition-colors"
+            className="text-sm bg-transparent border border-transparent rounded-md px-1.5 py-0.5 outline-none text-[var(--color-text-secondary)] hover:border-[var(--color-border)] focus:border-indigo-500/50 focus:text-[var(--color-text-primary)] min-w-0 w-full max-w-[280px] font-medium transition-colors truncate"
           />
           {/* Dirty / saved indicator */}
           <SaveStatus isDirty={isDirty} isSaving={isSaving} />
         </div>
-
-        <div className="flex-1 min-w-2" />
 
         {/* Action buttons */}
         <div className="flex items-center gap-1 shrink-0">
@@ -1031,7 +1030,7 @@ function ToolbarButton({
         ${colors}`}
     >
       <Icon size={14} className={spinning ? 'animate-spin' : ''} />
-      <span className="hidden xl:inline">{label}</span>
+      <span className="hidden 2xl:inline">{label}</span>
     </button>
   );
 }

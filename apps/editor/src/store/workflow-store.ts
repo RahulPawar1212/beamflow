@@ -827,15 +827,13 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   toWorkflow: (): SerializedWorkflowDTO => {
     const state = get();
     const now = new Date().toISOString();
-    // Derive isSubflow from the GRAPH, not the sticky store flag. A workflow is a
-    // subflow iff it contains a boundary node (system:subflow-input/-output) — those
-    // only ever exist INSIDE a subflow. A workflow that merely references a subflow
-    // via a `system:subflow` proxy node is a PARENT, not a subflow. Trusting the
-    // sticky `state.isSubflow` flag caused parents (and duplicated/copied workflows)
-    // to be mis-saved as subflows and then hidden from the Workflows list.
-    const isSubflow = state.nodes.some(
-      (n) => n.data.nodeType === 'system:subflow-input' || n.data.nodeType === 'system:subflow-output',
-    );
+    // isSubflow is EXPLICIT IDENTITY, decided once at creation and preserved
+    // thereafter — NOT derived from the graph and NOT re-read from sticky state
+    // elsewhere. `state.isSubflow` is the authoritative in-memory copy of the
+    // open workflow's identity: set from metadata in loadWorkflow, set to true
+    // only by createSubflowFromSelection (the child), and false by New/clear.
+    // This is stable across edits: deleting a boundary node does not reclassify
+    // a subflow, and a proxy node never turns a parent into a subflow.
     return {
       schemaVersion: '1.0.0',
       metadata: {
@@ -843,7 +841,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
         name: state.pipelineName,
         createdAt: now,
         updatedAt: now,
-        isSubflow,
+        isSubflow: state.isSubflow,
         parameters: state.pipelineParameters,
       },
       nodes: state.nodes.map((n) => {

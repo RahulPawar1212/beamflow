@@ -285,10 +285,17 @@ export async function pipelineRoutes(
           throw notFound('Pipeline not found or unauthorized.');
         }
 
-        // Fire and forget — run in background
+        // Fire and forget — run in background. If subflow expansion fails (e.g. a
+        // referenced subflow was deleted), record it as a failed preview so the
+        // panel shows the clear, node-named message instead of hanging.
         expandSubflows(workflow, userId).then(expandedWorkflow => {
           previewManager.triggerPreview(expandedWorkflow, req.params.nodeId, 1000).catch(console.error);
-        }).catch(console.error);
+        }).catch((err) => {
+          const message = err instanceof Error ? err.message : String(err);
+          previewCache
+            .updateMetadata(req.params.id, req.params.nodeId, { status: 'failed', errorMessage: message })
+            .catch(console.error);
+        });
 
         return reply.status(202).send({ message: 'Preview generation started.' });
       }
@@ -354,11 +361,30 @@ export async function pipelineRoutes(
         const subflowNode = { ...originalSubflowNode, type: 'system:subflow-output' };
         expandedNodes[subflowNodeIndex] = subflowNode;
 
+        // A human-friendly node reference for error messages (label falls back to id).
+        const nodeRef = (originalSubflowNode as any).label
+          ? `"${(originalSubflowNode as any).label}" (${subflowNode.id})`
+          : subflowNode.id;
+
         const subflowId = subflowNode.settings?.subflowId;
-        if (!subflowId) throw new Error(`Subflow node ${subflowNode.id} is missing subflowId.`);
+        if (!subflowId) {
+          throw badRequest(
+            `Subflow node ${nodeRef} has no subflow selected. Open the node and pick a subflow.`,
+            [{ severity: 'error', nodeId: subflowNode.id, message: 'No subflow selected for this Subflow node.' }],
+          );
+        }
 
         const subflowWf = await storage.get(subflowId as string, userId);
-        if (!subflowWf) throw new Error(`Subflow ${subflowId} not found.`);
+        if (!subflowWf) {
+          // The referenced subflow was deleted (or isn't accessible). Surface a
+          // clear, node-named validation error (400) instead of a bare 500 —
+          // the user needs to know WHICH node to fix.
+          throw badRequest(
+            `Subflow node ${nodeRef} references a subflow that no longer exists. ` +
+              `Pick a different subflow or remove the node.`,
+            [{ severity: 'error', nodeId: subflowNode.id, message: `Referenced subflow ${subflowId} not found (deleted?).` }],
+          );
+        }
 
         const fullyExpandedSubflow = await expandSubflows(subflowWf, userId, depth + 1);
 

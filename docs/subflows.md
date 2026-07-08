@@ -253,8 +253,13 @@ from project ownership and lifecycle.
   so.
 - **Deleting a subflow that's still referenced warns but is allowed** (user's choice):
   the delete flow fetches the reference count first and, if > 0, confirms with
-  "Used by N workflow(s) … delete anyway?". Referencing workflows then surface a
-  missing-subflow error until re-pointed. (Warn-but-allow, not hard-block.)
+  "Used by N workflow(s) … delete anyway?". (Warn-but-allow, not hard-block.)
+- **A workflow referencing a deleted subflow fails gracefully.** `expandSubflows`
+  (generate / execute / preview) throws a `badRequest` (400) with a clear, node-named
+  message — *"Subflow node \"<label>\" (<id>) references a subflow that no longer exists.
+  Pick a different subflow or remove the node."* — plus a structured `issues` entry
+  (`nodeId`) so the editor can pinpoint the node. It is NOT a bare 500. Preview records
+  the same message as a `failed` status so the panel shows it.
 
 ---
 

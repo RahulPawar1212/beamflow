@@ -6,7 +6,22 @@
  * the jsdom environment used by `*.test.tsx` component tests. Node-env
  * `*.test.ts` files load this file too but skip the DOM setup.
  */
-import { afterEach } from 'vitest';
+import { afterEach, beforeEach } from 'vitest';
+
+// Install the central schema-sync subscriber for every test (the app installs
+// it from App.tsx, which tests don't import). Reset + reinstall per test so
+// each starts with a clean subscription. Dynamic imports so this runs after
+// each file's vi.mock hoisting.
+beforeEach(async () => {
+  const { __resetSchemaSyncForTests, installSchemaSync } = await import('../lib/schema-sync');
+  const { useWorkflowStore } = await import('../store/workflow-store');
+  const { useSchemaStore } = await import('../lib/schema-store');
+  __resetSchemaSyncForTests();
+  installSchemaSync(
+    useWorkflowStore as any,
+    (nodes: any, edges: any) => useSchemaStore.getState().syncFromWorkflow(nodes, edges),
+  );
+});
 
 const hasDom = typeof window !== 'undefined' && typeof document !== 'undefined';
 

@@ -36,7 +36,6 @@ import type {
 import { registerBuiltinSchemaNodes } from '@beamflow/nodes';
 import { useWorkflowStore } from '../store/workflow-store';
 import { trace } from './trace';
-import { registerSchemaSync, installSchemaSync } from './schema-sync';
 
 // ─── One-time registration of built-in schema node factories ─────────────────
 // This runs once when the module is first imported.
@@ -347,13 +346,6 @@ export const useSchemaStore = create<SchemaStoreState>((set, get) => {
 const nodeTypeMap = new Map<string, string>();
 const nodeSettingsMap = new Map<string, Record<string, unknown>>();
 const edgeMap: [string, string][] = [];
-
-// Wire the central schema-sync subscriber (lib/schema-sync.ts). Registering the
-// full-rebuild function here (rather than schema-sync importing this store)
-// breaks the import cycle. Installing at module load means the subscriber is
-// active as soon as the schema store is imported — in the app and in tests.
-registerSchemaSync((nodes, edges) => useSchemaStore.getState().syncFromWorkflow(nodes, edges));
-installSchemaSync();
 
 // ─── Convenience hooks ────────────────────────────────────────────────────────
 

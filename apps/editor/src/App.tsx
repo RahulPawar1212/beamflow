@@ -13,10 +13,17 @@ import { useAuthStore } from './lib/auth-store.js';
 import { LoginPage } from './components/LoginPage.js';
 import { SettingsModal } from './components/SettingsModal.js';
 import { api } from './api/client.js';
-// Importing the schema store installs the central schema-propagation subscriber
-// (schema recomputes whenever {nodes, edges, subflowCache} changes — no store
-// action triggers it). See lib/schema-sync.ts and docs/debugging.md.
-import './lib/schema-store.js';
+import { useSchemaStore } from './lib/schema-store.js';
+import { installSchemaSync } from './lib/schema-sync.js';
+
+// Install the central schema-propagation subscriber once, from this leaf module
+// (both stores are fully initialized here). Schema recomputes whenever
+// {nodes, edges, subflowCache} changes — no store action triggers it.
+// See lib/schema-sync.ts and docs/debugging.md.
+installSchemaSync(
+  useWorkflowStore as unknown as Parameters<typeof installSchemaSync>[0],
+  (nodes, edges) => useSchemaStore.getState().syncFromWorkflow(nodes, edges),
+);
 
 export default function App() {
   const token = useAuthStore((s) => s.token);

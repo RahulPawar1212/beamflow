@@ -911,8 +911,18 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       isDirty: false,
       lastSavedAt: workflow.metadata.updatedAt,
     }));
-    
-    // Fetch all subflows recursively to populate the cache
+
+    // Sync the schema engine with the freshly loaded graph. This MUST happen
+    // unconditionally — refreshSubflowCache below early-returns when there are
+    // no subflow nodes, so relying on it alone left subflow-free workflows
+    // (e.g. CSV Source → Filter) with an unsynced engine and empty downstream
+    // column dropdowns on load.
+    useSchemaStore.getState().syncFromWorkflow(
+      nodes.map((n) => ({ id: n.id, nodeType: n.data.nodeType, settings: n.data.settings })),
+      edges.map((e) => ({ id: e.id, source: e.source, target: e.target, sourceHandle: e.sourceHandle, targetHandle: e.targetHandle })),
+    );
+
+    // Fetch any referenced subflows and re-sync once their definitions are cached.
     get().refreshSubflowCache();
   },
 

@@ -50,6 +50,8 @@ vi.mock('../api/client', async (importOriginal) => {
 // Import AFTER the mock is registered.
 const { useWorkflowStore } = await import('../store/workflow-store');
 const { useSchemaStore } = await import('./schema-store');
+const { api } = await import('../api/client');
+const getPipelineMock = api.getPipeline as unknown as ReturnType<typeof vi.fn>;
 
 const EXPECTED = ['TargetGroupId', 'GroupId', 'VariableId'];
 
@@ -161,5 +163,98 @@ describe('subflow schema propagation — interactive build', () => {
     await flush();
 
     expect(columnsInto(fltId)).toEqual(EXPECTED);
+  });
+});
+
+/**
+ * Regression guards for the specific defects that caused the empty dropdown.
+ * Each test targets one root cause so a future refactor can't silently
+ * reintroduce it.
+ */
+describe('subflow schema propagation — regression guards', () => {
+  function columnsInto(targetId: string): string[] {
+    const { edges } = useWorkflowStore.getState();
+    const schemas = useSchemaStore.getState().schemas;
+    return edges
+      .filter((e) => e.target === targetId)
+      .flatMap((e) => schemas.get(e.source)?.outputSchema.columns.map((c) => c.name) ?? []);
+  }
+
+  // BUG 1: refreshSubflowCache used to re-sync the schema engine ONLY when it
+  // fetched a new subflow (hasNew). On a reload where the cache is already warm,
+  // no fetch happens, so the full re-expansion never ran and downstream columns
+  // stayed empty. This asserts a warm-cache refresh still propagates.
+  it('warm cache (no new fetch) still propagates columns to downstream', async () => {
+    // First load warms the cache.
+    useWorkflowStore.getState().loadWorkflow(parentWorkflow);
+    await flush();
+    expect(useWorkflowStore.getState().subflowCache['child_1']).toBeTruthy();
+
+    // Clear only the engine's schema state, keep the warm subflowCache.
+    useSchemaStore.getState().clearSchemas();
+    getPipelineMock.mockClear();
+
+    // A refresh with the cache already populated must NOT fetch again, but MUST
+    // still re-run syncFromWorkflow so columns reappear.
+    await useWorkflowStore.getState().refreshSubflowCache();
+    await flush();
+
+    expect(getPipelineMock).not.toHaveBeenCalled(); // proves cache was warm
+    expect(filterInputColumns()).toEqual(EXPECTED);  // proves it re-synced anyway
+  });
+
+  // BUG 2: connecting an edge FROM a subflow node went through the incremental
+  // onEdgeAdded path, which does not re-inline the subflow internals, leaving the
+  // downstream node with an empty input schema. Connecting must yield columns.
+  it('connecting an edge from a subflow node propagates columns (not incremental-only)', async () => {
+    const store = useWorkflowStore.getState();
+    store.addNode('system:subflow', { x: 0, y: 0 });
+    await flush();
+    const sfId = useWorkflowStore.getState().nodes.find((n) => n.data.nodeType === 'system:subflow')!.id;
+    store.updateNodeSettings(sfId, { subflowId: 'child_1' });
+    store.addNode('beamflow:filter', { x: 300, y: 0 });
+    await flush();
+    const fltId = useWorkflowStore.getState().nodes.find((n) => n.data.nodeType === 'beamflow:filter')!.id;
+
+    store.onConnect({ source: sfId, target: fltId, sourceHandle: 'out', targetHandle: 'in' } as any);
+    await flush();
+
+    expect(columnsInto(fltId)).toEqual(EXPECTED);
+  });
+
+  // Guard: a plain (non-subflow) source still works via the incremental path —
+  // the subflow special-case in onConnect must not break ordinary edges.
+  it('non-subflow source (csv-source) still propagates on connect', async () => {
+    const store = useWorkflowStore.getState();
+    store.setNodeDefinitions([
+      ...useWorkflowStore.getState().nodeDefinitions,
+      { type: 'beamflow:csv-source', name: 'CSV Source', category: 'source', icon: 'file', ports: [], settings: [] } as any,
+    ]);
+    store.addNode('beamflow:csv-source', { x: 0, y: 0 });
+    await flush();
+    const srcId = useWorkflowStore.getState().nodes.find((n) => n.data.nodeType === 'beamflow:csv-source')!.id;
+    store.updateNodeSettings(srcId, {
+      schemaColumns: [
+        { name: 'colA', type: 'string', nullable: true },
+        { name: 'colB', type: 'integer', nullable: true },
+      ],
+    });
+    store.addNode('beamflow:filter', { x: 300, y: 0 });
+    await flush();
+    const fltId = useWorkflowStore.getState().nodes.find((n) => n.data.nodeType === 'beamflow:filter')!.id;
+
+    store.onConnect({ source: srcId, target: fltId, sourceHandle: 'out', targetHandle: 'in' } as any);
+    await flush();
+
+    expect(columnsInto(fltId)).toEqual(['colA', 'colB']);
+  });
+
+  // Guard: an empty column dropdown is exactly what the user reported. Assert the
+  // PropertyPanel gate condition (inputColumns.length > 0) holds for the subflow case.
+  it('PropertyPanel dropdown gate: subflow downstream has a non-empty column list', async () => {
+    useWorkflowStore.getState().loadWorkflow(parentWorkflow);
+    await flush();
+    const cols = filterInputColumns();
+    expect(cols.length).toBeGreaterThan(0);
   });
 });

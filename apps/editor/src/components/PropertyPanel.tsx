@@ -25,11 +25,21 @@ export function PropertyPanel() {
   const selectedNode = nodes.find((n) => n.id === selectedNodeId);
   if (!selectedNode) return null;
 
-  // Retrieve input columns from parent nodes
+  // Retrieve input columns from parent nodes. Dedupe by column id/name: a node
+  // can have more than one incoming edge from the same source (e.g. a stale
+  // duplicate edge, or a fan-in), which would otherwise list every column twice
+  // and produce duplicate React keys in the dropdown.
   const incomingEdges = edges.filter((e) => e.target === selectedNode.id);
+  const seenColumns = new Set<string>();
   const inputColumns = incomingEdges.flatMap((edge) => {
     const parentSchema = schemas.get(edge.source)?.outputSchema;
-    return parentSchema ? parentSchema.columns : [];
+    if (!parentSchema) return [];
+    return parentSchema.columns.filter((c) => {
+      const key = (c as { id?: string }).id || c.name;
+      if (seenColumns.has(key)) return false;
+      seenColumns.add(key);
+      return true;
+    });
   });
 
   const def = nodeDefinitions.find((d) => d.type === selectedNode.data.nodeType);

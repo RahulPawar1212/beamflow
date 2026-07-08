@@ -297,9 +297,17 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       edges: addEdge({ ...connection, id: newEdgeId }, get().edges),
       isDirty: true,
     });
-    // Schema propagation: notify the schema engine of the new edge
+    // Schema propagation: notify the schema engine of the new edge.
     if (connection.source && connection.target) {
-      useSchemaStore.getState().onEdgeAdded(connection.source, connection.target);
+      const srcNode = get().nodes.find((n) => n.id === connection.source);
+      if (srcNode?.data?.nodeType === 'system:subflow') {
+        // Edges from a subflow proxy need a full re-sync: the incremental path
+        // doesn't (re)inline the subflow internals, so the downstream node would
+        // otherwise receive an empty schema. refreshSubflowCache re-runs syncFromWorkflow.
+        get().refreshSubflowCache();
+      } else {
+        useSchemaStore.getState().onEdgeAdded(connection.source, connection.target);
+      }
     }
   },
 
@@ -920,19 +928,22 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       }
     }
 
-    if (hasNew) {
-      set({ subflowCache: cache });
-      // Tell schema store to re-sync now that cache is updated
-      const { nodes: currentNodes, edges: currentEdges } = get();
-      useSchemaStore.getState().syncFromWorkflow(
-        currentNodes.map(n => ({
-          id: n.id,
-          nodeType: n.data.nodeType,
-          settings: n.data.settings
-        })),
-        currentEdges.map(e => ({ id: e.id, source: e.source, target: e.target, sourceHandle: e.sourceHandle, targetHandle: e.targetHandle }))
-      );
-    }
+    if (hasNew) set({ subflowCache: cache });
+
+    // Always re-run a full schema sync when subflow nodes are present — not only
+    // when we fetched something new. Incremental edge/settings updates don't
+    // re-expand the inlined subflow internals, so without this the downstream
+    // schema (e.g. a Filter's column dropdown) stays empty even though the cache
+    // holds the child definition. syncFromWorkflow reads subflowCache itself.
+    const { nodes: currentNodes, edges: currentEdges } = get();
+    useSchemaStore.getState().syncFromWorkflow(
+      currentNodes.map(n => ({
+        id: n.id,
+        nodeType: n.data.nodeType,
+        settings: n.data.settings
+      })),
+      currentEdges.map(e => ({ id: e.id, source: e.source, target: e.target, sourceHandle: e.sourceHandle, targetHandle: e.targetHandle }))
+    );
   },
 
   clearWorkflow: () => {

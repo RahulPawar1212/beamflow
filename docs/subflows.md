@@ -228,7 +228,10 @@ from project ownership and lifecycle.
 - Startup backfill (`ensureDefaultProjects`) excludes `is_subflow=1`, so subflows are
   never re-attached to a project on boot.
 
-### Finding & attaching a subflow
+### Finding, attaching & managing subflows
+- The **Subflows** toolbar button opens the **Subflow Library** modal
+  (`SubflowLibraryModal` in `Toolbar.tsx`): search the library, **open** a subflow to
+  edit it, or **delete** one (with the used-by guard below).
 - The **Subflow** palette node is draggable; the boundary nodes
   (`system:subflow-input` / `-output`) are hidden from the palette (they only exist
   inside a subflow being edited) — filtered by type in `NodePalette.tsx`.
@@ -251,9 +254,10 @@ from project ownership and lifecycle.
   workflows (`is_subflow=0`) of that project and null-outs any subflow's `projectId` so
   the DB-level FK cascade can't take it either. The project-delete confirmation copy says
   so.
-- **Deleting a subflow that's still referenced warns but is allowed** (user's choice):
-  the delete flow fetches the reference count first and, if > 0, confirms with
-  "Used by N workflow(s) … delete anyway?". (Warn-but-allow, not hard-block.)
+- **Deleting a subflow** is done from the Subflow Library modal (`Toolbar.tsx`).
+  Referenced subflows warn but are allowed (user's choice): if `usedByCount > 0` the
+  delete confirms with "Used by N workflow(s) … delete anyway?". (Warn-but-allow, not
+  hard-block.)
 - **A workflow referencing a deleted subflow fails gracefully.** `expandSubflows`
   (generate / execute / preview) throws a `badRequest` (400) with a clear, node-named
   message — *"Subflow node \"<label>\" (<id>) references a subflow that no longer exists.
@@ -274,7 +278,7 @@ from project ownership and lifecycle.
 | Proxy handle rendering | `apps/editor/src/components/nodes/CustomNodes.tsx` |
 | Palette filter (hide boundary nodes) | `apps/editor/src/components/NodePalette.tsx` |
 | Subflow picker (searchable library) | `apps/editor/src/components/PropertyPanel.tsx` (`SubflowPicker`) |
-| Delete guard + project-delete copy | `apps/editor/src/components/Toolbar.tsx` |
+| Subflow Library modal (browse/open/delete) + delete guard + project-delete copy | `apps/editor/src/components/Toolbar.tsx` (`SubflowLibraryModal`) |
 | API client | `apps/editor/src/api/client.ts` (`listSubflows`, `getReferences`) |
 | Server expansion + CRUD + preview + references + subflowsOnly | `apps/server/src/routes/pipelines.ts` |
 | Global list + reference count | `apps/server/src/db/repositories/workflows.repo.ts` (`listSubflows`, `countReferences`) |

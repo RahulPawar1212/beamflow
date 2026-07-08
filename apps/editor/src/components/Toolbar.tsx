@@ -54,6 +54,7 @@ export function Toolbar() {
   const [showCode, setShowCode] = useState(false);
   const [showSwitcher, setShowSwitcher] = useState(false);
   const [showProjects, setShowProjects] = useState(false);
+  const [showSubflows, setShowSubflows] = useState(false);
   const currentProjectId = useWorkflowStore((s) => s.currentProjectId);
   const currentProjectName = useWorkflowStore((s) => s.currentProjectName);
   const setCurrentProject = useWorkflowStore((s) => s.setCurrentProject);
@@ -257,6 +258,14 @@ export function Toolbar() {
             onClick={() => setShowSwitcher(true)}
           />
 
+          {/* Subflow library */}
+          <ToolbarButton
+            icon={Boxes}
+            label="Subflows"
+            hint="Manage the shared subflow library"
+            onClick={() => setShowSubflows(true)}
+          />
+
           <div className="w-px h-5 bg-[var(--color-border)] mx-1" />
 
           {/* Undo/Redo */}
@@ -407,6 +416,21 @@ export function Toolbar() {
           onNew={() => {
             setShowSwitcher(false);
             clearWorkflow();
+          }}
+        />
+      )}
+
+      {/* Subflow Library Modal */}
+      {showSubflows && (
+        <SubflowLibraryModal
+          onClose={() => setShowSubflows(false)}
+          onOpen={(id) => {
+            setShowSubflows(false);
+            api.getPipeline(id).then((wf) => {
+              loadWorkflow(wf);
+            }).catch((err) => {
+              addToast('error', `Failed to open subflow: ${err instanceof Error ? err.message : err}`);
+            });
           }}
         />
       )}
@@ -913,6 +937,141 @@ function WorkflowSwitcherModal({
                       ) : (
                         <div className="w-[28px]" /> // spacer for alignment with trash icon
                       )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── Subflow Library Modal ──────────────────────────────────────────
+// Browse and manage the user-global subflow library: open a subflow to edit it,
+// or delete it (with a "used by N" warning, since deleting a referenced subflow
+// leaves those workflows with a missing-subflow error). Exported for testing.
+export function SubflowLibraryModal({
+  onClose,
+  onOpen,
+}: {
+  onClose: () => void;
+  onOpen: (id: string) => void;
+}) {
+  const [subflows, setSubflows] = useState<PipelineSummary[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
+  const currentId = useWorkflowStore((s) => s.pipelineId);
+  const addToast = useWorkflowStore((s) => s.addToast);
+
+  useEffect(() => {
+    let mounted = true;
+    api
+      .listSubflows()
+      .then((res) => { if (mounted) { setSubflows(res.pipelines); setLoading(false); } })
+      .catch((err) => { if (mounted) { setError(err instanceof Error ? err.message : 'Failed to load subflows'); setLoading(false); } });
+    return () => { mounted = false; };
+  }, []);
+
+  const handleDelete = async (e: React.MouseEvent, s: PipelineSummary) => {
+    e.stopPropagation();
+    // Warn-but-allow: referenced subflows break their parents when deleted.
+    const used = s.usedByCount ?? 0;
+    const msg = used > 0
+      ? `"${s.name}" is used by ${used} workflow${used === 1 ? '' : 's'}. Deleting it will leave ` +
+        `${used === 1 ? 'that workflow' : 'those workflows'} with a missing-subflow error. Delete anyway?`
+      : `Delete subflow "${s.name}"? This can't be undone.`;
+    if (!confirm(msg)) return;
+    try {
+      await api.deletePipeline(s.id);
+      setSubflows((prev) => prev.filter((p) => p.id !== s.id));
+      addToast('success', 'Subflow deleted');
+    } catch (err) {
+      addToast('error', `Failed to delete: ${err instanceof Error ? err.message : err}`);
+    }
+  };
+
+  const filtered = query.trim()
+    ? subflows.filter((s) =>
+        s.name.toLowerCase().includes(query.toLowerCase()) ||
+        (s.description ?? '').toLowerCase().includes(query.toLowerCase()))
+    : subflows;
+
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="max-w-[95vw] sm:max-w-3xl w-full p-0 gap-0 overflow-hidden bg-[var(--color-surface-100)] border-[var(--color-border)]">
+        <DialogHeader className="px-5 py-4 pr-12 border-b border-[var(--color-border)] bg-[var(--color-surface-200)]">
+          <DialogTitle className="flex items-center gap-2">
+            <Boxes size={18} className="text-indigo-400" />
+            <span className="text-gray-200 text-base">Subflow Library</span>
+          </DialogTitle>
+        </DialogHeader>
+
+        <div className="px-4 py-3 border-b border-[var(--color-border)] bg-[var(--color-surface-100)]">
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search subflows…"
+            className="w-full h-9 px-3 rounded-md bg-[var(--color-surface-200)] border border-[var(--color-border)] text-sm text-gray-200 outline-none focus:border-indigo-500/50"
+          />
+        </div>
+
+        <div className="flex-1 overflow-y-auto max-h-[70vh] p-4 bg-[var(--color-surface-100)]">
+          {loading ? (
+            <div className="flex items-center justify-center py-12 text-gray-500 gap-2">
+              <Loader2 size={16} className="animate-spin" /> Loading subflows...
+            </div>
+          ) : error ? (
+            <div className="text-center py-8 text-red-400 text-sm">
+              <XCircle size={24} className="mx-auto mb-2 opacity-50" />{error}
+            </div>
+          ) : subflows.length === 0 ? (
+            <div className="text-center py-12">
+              <Boxes size={32} className="mx-auto mb-3 text-gray-600" />
+              <p className="text-sm font-medium text-gray-400">No subflows yet</p>
+              <p className="text-xs text-gray-500 mt-1">Select nodes on the canvas and use "Group as node" to create one.</p>
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="text-center py-8 text-gray-500 text-sm">No matches.</div>
+          ) : (
+            <div className="flex flex-col gap-2">
+              {filtered.map((s) => {
+                const isCurrent = s.id === currentId;
+                const used = s.usedByCount ?? 0;
+                return (
+                  <div
+                    key={s.id}
+                    onClick={() => !isCurrent && onOpen(s.id)}
+                    className={`group relative px-4 py-3 rounded-lg border flex items-center justify-between transition-all cursor-pointer
+                      ${isCurrent
+                        ? 'border-indigo-500/50 bg-indigo-500/10 cursor-default'
+                        : 'border-[var(--color-border)] bg-[var(--color-surface-200)]/40 hover:border-gray-500 hover:bg-[var(--color-surface-200)]'}`}
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <h4 className="text-sm font-bold text-gray-200 truncate">{s.name}</h4>
+                        {isCurrent && (
+                          <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 text-[10px] font-bold shrink-0">
+                            <span className="w-1.5 h-1.5 rounded-full bg-indigo-400" /> Editing
+                          </span>
+                        )}
+                      </div>
+                      {s.description && <p className="text-[11px] text-gray-500 truncate mt-0.5">{s.description}</p>}
+                    </div>
+                    <div className="flex items-center gap-4 text-[11px] text-gray-500 font-medium shrink-0">
+                      <span title="Workflows that reference this subflow">
+                        {used > 0 ? `used by ${used}` : 'unused'}
+                      </span>
+                      <button
+                        onClick={(e) => handleDelete(e, s)}
+                        className="p-1.5 rounded-md text-gray-500 opacity-0 group-hover:opacity-100 hover:text-red-400 hover:bg-red-500/10 transition-all"
+                        title="Delete subflow"
+                      >
+                        <Trash2 size={16} />
+                      </button>
                     </div>
                   </div>
                 );

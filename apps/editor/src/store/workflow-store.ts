@@ -614,7 +614,8 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       createdSubflow = await api.createPipeline({
         name: name.trim() || 'Subflow',
         isSubflow: true,
-        projectId: state.currentProjectId ?? undefined,
+        // Subflows are a user-global shared library — not tied to a project.
+        // The server ignores projectId for subflows; omit it here too.
         nodes: subNodes,
         connections: subConnections,
       });

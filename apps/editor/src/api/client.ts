@@ -112,6 +112,12 @@ export const api = {
     const query = params.toString() ? `?${params.toString()}` : '';
     return request<{ pipelines: PipelineSummary[] }>(`/pipelines${query}`);
   },
+  /** The user-global subflow library (all projects), each with usedByCount. */
+  listSubflows: () =>
+    request<{ pipelines: PipelineSummary[] }>('/pipelines?subflowsOnly=true'),
+  /** How many workflows reference a given subflow (for the delete guard). */
+  getReferences: (id: string) =>
+    request<{ count: number; names: string[] }>(`/pipelines/${seg(id)}/references`),
   getPipeline: (id: string) => request<SerializedWorkflowDTO>(`/pipelines/${seg(id)}`, { cache: 'no-store' }),
   createPipeline: (data: { name?: string; description?: string; isSubflow?: boolean; parameters?: any[]; projectId?: string; nodes?: any[]; connections?: any[] }) =>
     request<SerializedWorkflowDTO>('/pipelines', {
@@ -348,6 +354,8 @@ export interface PipelineSummary {
   description?: string;
   isSubflow?: boolean;
   projectId?: string;
+  /** For subflows listed via subflowsOnly: how many workflows reference it. */
+  usedByCount?: number;
   createdAt: string;
   updatedAt: string;
   nodeCount: number;

@@ -11,7 +11,10 @@ export const workflowsRepo = {
     if (!options?.includeSubflows) {
       conditions.push(eq(workflowsTable.isSubflow, 0));
     }
+    // projectId scopes REGULAR workflows only. Subflows are a user-global shared
+    // library (not tied to a project), so a projectId filter must not hide them.
     if (options?.projectId) {
+      conditions.push(eq(workflowsTable.isSubflow, 0));
       conditions.push(eq(workflowsTable.projectId, options.projectId));
     }
 
@@ -21,6 +24,38 @@ export const workflowsRepo = {
       .where(and(...conditions));
 
     return results.map((row: any) => JSON.parse(row.settingsJson));
+  },
+
+  /** All of the user's subflows (the shared library) — never project-scoped. */
+  async listSubflows(ownerId: string): Promise<SerializedWorkflow[]> {
+    const results = await db
+      .select()
+      .from(workflowsTable)
+      .where(and(eq(workflowsTable.ownerId, ownerId), eq(workflowsTable.isSubflow, 1)));
+    return results.map((row: any) => JSON.parse(row.settingsJson));
+  },
+
+  /**
+   * Count how many of the owner's workflows reference a given subflow (via a
+   * `system:subflow` node whose settings.subflowId === subflowId). References
+   * are embedded in each workflow's settings_json, so this scans parsed rows.
+   */
+  async countReferences(ownerId: string, subflowId: string): Promise<{ count: number; names: string[] }> {
+    const rows = await db
+      .select()
+      .from(workflowsTable)
+      .where(eq(workflowsTable.ownerId, ownerId));
+    const names: string[] = [];
+    for (const row of rows as any[]) {
+      if (row.id === subflowId) continue; // don't count itself
+      let wf: SerializedWorkflow;
+      try { wf = JSON.parse(row.settingsJson); } catch { continue; }
+      const refs = wf.nodes?.some(
+        (n: any) => n.type === 'system:subflow' && n.settings?.subflowId === subflowId,
+      );
+      if (refs) names.push(wf.metadata?.name ?? row.name);
+    }
+    return { count: names.length, names };
   },
 
   async get(id: string, ownerId: string): Promise<SerializedWorkflow | null> {

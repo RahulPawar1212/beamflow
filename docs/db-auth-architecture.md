@@ -120,16 +120,20 @@ erDiagram
 ```
 
 **Notes on recent columns/tables:**
-- `projects` groups a user's workflows; see [projects.md](projects.md).
-- `workflows.project_id` is a **nullable** FK (existing rows are backfilled to a per-user
-  "Default Project" on startup).
+- `projects` groups a user's **regular** workflows; see [projects.md](projects.md).
+- `workflows.project_id` is a **nullable** FK. Regular workflows are backfilled to a
+  per-user "Default Project" on startup; **subflows keep `project_id = null`** — they are
+  a user-global shared library, not owned by a project (see
+  [subflows.md §9](subflows.md#9-shared-library-global-scope-picker-references)).
 - `workflows.is_subflow` marks reusable nested pipelines; see [subflows.md](subflows.md).
 - `users.gemini_api_key` stores the user's own Gemini key for the AI Flow Maker.
 
 **Cascade caveat:** although FKs declare `ON DELETE CASCADE`, libSQL does not reliably
 honor `PRAGMA foreign_keys` across its per-statement local-file connections, so
 project→workflow deletion is performed **explicitly in `projects.repo.ts`** rather than
-relying on the DB cascade. The pragma is still enabled in `db/client.ts` as a backstop.
+relying on the DB cascade. That explicit delete also **spares subflows** (`is_subflow=0`
+only) and null-outs any subflow's `projectId`, so a project delete never removes a shared
+subflow. The pragma is still enabled in `db/client.ts` as a backstop.
 
 ---
 

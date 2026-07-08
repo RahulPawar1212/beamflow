@@ -18,6 +18,7 @@ import { generateId, timestamp, SCHEMA_VERSION } from '@beamflow/shared';
 import type { SerializedWorkflow, PreviewRowsResponse } from '@beamflow/shared';
 import type { IStorage } from '../storage.js';
 import { projectsRepo } from '../db/repositories/projects.repo.js';
+import { workflowsRepo } from '../db/repositories/workflows.repo.js';
 import { notFound, badRequest, ApiError } from '../errors.js';
 
 /**
@@ -121,9 +122,32 @@ export async function pipelineRoutes(
 
     // ─── CRUD ─────────────────────────────────────────────────────────
 
-    /** GET /api/pipelines — List all saved pipelines. */
-    appWithAuth.get<{ Querystring: { includeSubflows?: string; projectId?: string } }>('/api/pipelines', async (req, reply) => {
+    /** GET /api/pipelines — List saved pipelines.
+     *  ?subflowsOnly=true → the user-global subflow library (with usedByCount).
+     *  ?projectId=… scopes regular workflows; ?includeSubflows mixes subflows in. */
+    appWithAuth.get<{ Querystring: { includeSubflows?: string; projectId?: string; subflowsOnly?: string } }>('/api/pipelines', async (req, reply) => {
       const userId = (req.user as any).id;
+      const subflowsOnly = req.query.subflowsOnly === 'true';
+
+      if (subflowsOnly) {
+        // The shared library: all the user's subflows, each with how many
+        // workflows reference it (for the picker's "used by N" + delete guard).
+        const subflows = await workflowsRepo.listSubflows(userId);
+        const summaries = await Promise.all(subflows.map(async (w) => ({
+          id: w.metadata.id,
+          name: w.metadata.name,
+          description: w.metadata.description,
+          isSubflow: true,
+          projectId: w.metadata.projectId,
+          createdAt: w.metadata.createdAt,
+          updatedAt: w.metadata.updatedAt,
+          nodeCount: w.nodes.length,
+          connectionCount: w.connections.length,
+          usedByCount: (await workflowsRepo.countReferences(userId, w.metadata.id)).count,
+        })));
+        return reply.send({ pipelines: summaries });
+      }
+
       const includeSubflows = req.query.includeSubflows === 'true';
       const projectId = req.query.projectId || undefined;
       const workflows = await storage.list(userId, { includeSubflows, projectId });
@@ -161,12 +185,17 @@ export async function pipelineRoutes(
         const userId = (req.user as any).id;
         const id = generateId('pipeline');
         const now = timestamp();
+        const isSubflow = (req.body as Record<string, any>)?.isSubflow || false;
 
-        // Scope the pipeline to the requested project, or the user's default project
-        // when none is supplied (keeps every workflow attached to a project).
-        let projectId = (req.body as Record<string, any>)?.projectId as string | undefined;
-        if (!projectId) {
-          projectId = (await projectsRepo.ensureDefaultProject(userId)).id;
+        // Subflows are a USER-GLOBAL shared library — reusable across all projects —
+        // so they are NOT tied to a project (projectId stays null). Regular
+        // workflows are scoped to the requested project, or the user's default.
+        let projectId: string | undefined;
+        if (!isSubflow) {
+          projectId = (req.body as Record<string, any>)?.projectId as string | undefined;
+          if (!projectId) {
+            projectId = (await projectsRepo.ensureDefaultProject(userId)).id;
+          }
         }
 
         const workflow: SerializedWorkflow = {
@@ -175,7 +204,7 @@ export async function pipelineRoutes(
             id,
             name: (req.body as Record<string, any>)?.name || 'Untitled Pipeline',
             description: (req.body as Record<string, any>)?.description || '',
-            isSubflow: (req.body as Record<string, any>)?.isSubflow || false,
+            isSubflow,
             parameters: (req.body as Record<string, any>)?.parameters || [],
             projectId,
             createdAt: now,
@@ -231,6 +260,16 @@ export async function pipelineRoutes(
         }
         await previewStorage.deleteAll(req.params.id);
         return reply.status(204).send();
+      },
+    );
+
+    /** GET /api/pipelines/:id/references — how many workflows use this subflow. */
+    appWithAuth.get<{ Params: { id: string } }>(
+      '/api/pipelines/:id/references',
+      async (req, reply) => {
+        const userId = (req.user as any).id;
+        const { count, names } = await workflowsRepo.countReferences(userId, req.params.id);
+        return reply.send({ count, names });
       },
     );
 

@@ -77,10 +77,18 @@ export const projectsRepo = {
     // across statements, so the DB-level cascade silently fails. Doing it in the
     // app is portable across SQLite and Postgres. Order matters: leaf rows
     // (versions, variables) → workflows → project.
+    //
+    // IMPORTANT: subflows are a user-global shared library — they must SURVIVE a
+    // project delete (other projects' workflows may reference them). Only regular
+    // workflows (is_subflow=0) are deleted with the project.
     const childWorkflows = await db
       .select({ id: workflowsTable.id })
       .from(workflowsTable)
-      .where(and(eq(workflowsTable.projectId, id), eq(workflowsTable.ownerId, ownerId)));
+      .where(and(
+        eq(workflowsTable.projectId, id),
+        eq(workflowsTable.ownerId, ownerId),
+        eq(workflowsTable.isSubflow, 0),
+      ));
     const workflowIds = childWorkflows.map((w: any) => w.id);
 
     if (workflowIds.length > 0) {
@@ -88,8 +96,23 @@ export const projectsRepo = {
       await db.delete(variablesTable as any).where(inArray(variablesTable.workflowId, workflowIds));
       await db
         .delete(workflowsTable as any)
-        .where(and(eq(workflowsTable.projectId, id), eq(workflowsTable.ownerId, ownerId)));
+        .where(and(
+          eq(workflowsTable.projectId, id),
+          eq(workflowsTable.ownerId, ownerId),
+          eq(workflowsTable.isSubflow, 0),
+        ));
     }
+
+    // Detach any subflow that happened to carry this projectId, so the DB-level
+    // FK cascade (Postgres) can't take it with the project either.
+    await db
+      .update(workflowsTable as any)
+      .set({ projectId: null })
+      .where(and(
+        eq(workflowsTable.projectId, id),
+        eq(workflowsTable.ownerId, ownerId),
+        eq(workflowsTable.isSubflow, 1),
+      ));
 
     await db
       .delete(projectsTable as any)
@@ -114,11 +137,13 @@ export const projectsRepo = {
  * every boot — a no-op once each user has a project and no NULL project_id remains.
  */
 export async function ensureDefaultProjects(): Promise<void> {
-  // Find workflows with no project; group by owner and assign each owner's default.
+  // Find REGULAR workflows with no project; assign each owner's default project.
+  // Subflows are intentionally project-less (global library) — never backfill them,
+  // or they'd get re-attached to a project on every boot.
   const orphanWorkflows = await db
     .select()
     .from(workflowsTable)
-    .where(isNull(workflowsTable.projectId));
+    .where(and(isNull(workflowsTable.projectId), eq(workflowsTable.isSubflow, 0)));
 
   if (orphanWorkflows.length === 0) return;
 
@@ -128,6 +153,10 @@ export async function ensureDefaultProjects(): Promise<void> {
     await db
       .update(workflowsTable as any)
       .set({ projectId: project.id })
-      .where(and(eq(workflowsTable.ownerId, ownerId as string), isNull(workflowsTable.projectId)));
+      .where(and(
+        eq(workflowsTable.ownerId, ownerId as string),
+        isNull(workflowsTable.projectId),
+        eq(workflowsTable.isSubflow, 0),
+      ));
   }
 }

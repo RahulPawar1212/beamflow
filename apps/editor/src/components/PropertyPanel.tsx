@@ -696,60 +696,108 @@ function SettingControl({ nodeId, setting, value, onChange, inputColumns }: Sett
 }
 
 // ─── Subflow picker ────────────────────────────────────────────────
-// Lets a `system:subflow` node reference an existing subflow (isSubflow=true)
-// in the current project. Picking one sets `subflowId` (→ schema propagation)
-// and relabels the on-canvas node to the subflow's name.
+// Searchable list of the user-global subflow library (reusable across every
+// project). Each row shows name + description + "used by N". Picking one sets
+// `subflowId` (→ refreshSubflowCache(true) → central schema-sync) and relabels
+// the on-canvas node. Excludes the currently-open workflow (no self-reference).
+interface SubflowRow { id: string; name: string; description?: string; usedByCount?: number }
+
 function SubflowPicker({
   nodeId,
   value,
   onChange,
-  baseInputClass,
 }: {
   nodeId: string;
   value: string;
   onChange: (v: unknown) => void;
   baseInputClass: string;
 }) {
-  const currentProjectId = useWorkflowStore((s) => s.currentProjectId);
   const currentPipelineId = useWorkflowStore((s) => s.pipelineId);
   const updateNodeLabel = useWorkflowStore((s) => s.updateNodeLabel);
-  const [subflows, setSubflows] = React.useState<Array<{ id: string; name: string }>>([]);
+  const [subflows, setSubflows] = React.useState<SubflowRow[]>([]);
   const [loading, setLoading] = React.useState(true);
+  const [query, setQuery] = React.useState('');
 
   React.useEffect(() => {
     let mounted = true;
     api
-      .listPipelines(currentProjectId ?? undefined, true)
+      .listSubflows()
       .then((res) => {
         if (!mounted) return;
-        // Only subflows, and never let a subflow reference itself.
         setSubflows(
           res.pipelines
-            .filter((p) => p.isSubflow && p.id !== currentPipelineId)
-            .map((p) => ({ id: p.id, name: p.name })),
+            .filter((p) => p.id !== currentPipelineId) // no self-reference
+            .map((p) => ({ id: p.id, name: p.name, description: p.description, usedByCount: p.usedByCount })),
         );
         setLoading(false);
       })
       .catch(() => { if (mounted) setLoading(false); });
     return () => { mounted = false; };
-  }, [currentProjectId, currentPipelineId]);
+  }, [currentPipelineId]);
+
+  const filtered = query.trim()
+    ? subflows.filter((s) =>
+        s.name.toLowerCase().includes(query.toLowerCase()) ||
+        (s.description ?? '').toLowerCase().includes(query.toLowerCase()))
+    : subflows;
+  const selected = subflows.find((s) => s.id === value);
+
+  const pick = (s: SubflowRow) => {
+    onChange(s.id);
+    updateNodeLabel(nodeId, s.name);
+  };
+
+  const inputCls = `w-full px-2.5 py-1.5 text-xs rounded-lg bg-[var(--color-surface-200)]
+    border border-[var(--color-border)] text-gray-300 placeholder-gray-600 outline-none
+    focus:border-indigo-500/50 transition-colors`;
 
   return (
-    <select
-      value={value}
-      onChange={(e) => {
-        const id = e.target.value;
-        onChange(id);
-        const picked = subflows.find((s) => s.id === id);
-        if (picked) updateNodeLabel(nodeId, picked.name);
-      }}
-      className={baseInputClass}
-    >
-      <option value="">{loading ? 'Loading subflows…' : '-- Select a subflow --'}</option>
-      {subflows.map((s) => (
-        <option key={s.id} value={s.id}>{s.name}</option>
-      ))}
-    </select>
+    <div className="flex flex-col gap-1.5">
+      {/* Current selection */}
+      {selected && (
+        <div className="text-[11px] text-indigo-300 bg-indigo-500/10 border border-indigo-500/20 rounded-md px-2 py-1">
+          Using: <span className="font-semibold">{selected.name}</span>
+        </div>
+      )}
+      <input
+        type="text"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="Search subflows…"
+        className={inputCls}
+      />
+      <div className="max-h-48 overflow-y-auto flex flex-col gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-100)] p-1">
+        {loading ? (
+          <div className="text-[11px] text-gray-500 px-2 py-2">Loading subflows…</div>
+        ) : filtered.length === 0 ? (
+          <div className="text-[11px] text-gray-500 px-2 py-2">
+            {subflows.length === 0 ? 'No subflows yet — create one with "Group as node".' : 'No matches.'}
+          </div>
+        ) : (
+          filtered.map((s) => (
+            <button
+              key={s.id}
+              onClick={() => pick(s)}
+              className={`text-left px-2 py-1.5 rounded-md transition-colors ${
+                s.id === value
+                  ? 'bg-indigo-500/15 border border-indigo-500/30'
+                  : 'hover:bg-[var(--color-surface-200)] border border-transparent'
+              }`}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-medium text-gray-200 truncate">{s.name}</span>
+                <span className="text-[10px] text-gray-500 shrink-0">
+                  {s.usedByCount ? `used by ${s.usedByCount}` : 'unused'}
+                </span>
+              </div>
+              {s.description && (
+                <div className="text-[10px] text-gray-500 truncate">{s.description}</div>
+              )}
+            </button>
+          ))
+        )}
+      </div>
+    </div>
   );
 }
 

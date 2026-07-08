@@ -6,8 +6,13 @@ a subflow, and from then on the parent shows one **proxy node** in place of the 
 The subflow itself is a normal pipeline row in the database (flagged `isSubflow`), so
 it can be edited independently and referenced by many parents.
 
+Subflows are a **user-global shared library**: they are *not* tied to a project, are
+reusable from any project, and are attached to a parent either by "Group as node" or
+by dragging the **Subflow** node from the palette and picking an existing one. See
+[§10 Shared library](#10-shared-library-global-scope-picker-references).
+
 This document describes how subflows are represented, persisted, expanded for schema
-propagation and code generation, and previewed. It complements
+propagation and code generation, previewed, and reused. It complements
 [architecture.md](architecture.md), [schema-propagation.md](schema-propagation.md),
 and [db-auth-architecture.md](db-auth-architecture.md).
 
@@ -84,7 +89,8 @@ didn't even mention `parameters`), so a freshly-saved subflow silently lost its
   `0002_*`) alongside the full workflow JSON.
 
 The main pipeline **list** (`GET /api/pipelines`) hides subflows by default; pass
-`?includeSubflows=1` to include them.
+`?includeSubflows=true` to include them, or `?subflowsOnly=true` for the shared library
+(§10). A subflow's `projectId` is **null** — subflows are not project-scoped (§10).
 
 ---
 
@@ -207,7 +213,52 @@ placement all line up.
 
 ---
 
-## 9. File map
+## 9. Shared library (global scope, picker, references)
+
+Subflows are a **user-global shared library** — define once, reuse in any workflow in
+any project. This is deliberate: a subflow is like a shared function, so it is decoupled
+from project ownership and lifecycle.
+
+### Scope: subflows are not project-owned
+- A subflow's `project_id` is **null**. The `POST /api/pipelines` route skips the
+  default-project assignment when `isSubflow` is true (`routes/pipelines.ts`), and
+  `createSubflowFromSelection` no longer sends a `projectId`.
+- `workflowsRepo.list` applies a `projectId` filter to **regular workflows only** — it
+  never hides subflows (`workflows.repo.ts`).
+- Startup backfill (`ensureDefaultProjects`) excludes `is_subflow=1`, so subflows are
+  never re-attached to a project on boot.
+
+### Finding & attaching a subflow
+- The **Subflow** palette node is draggable; the boundary nodes
+  (`system:subflow-input` / `-output`) are hidden from the palette (they only exist
+  inside a subflow being edited) — filtered by type in `NodePalette.tsx`.
+- Selecting a `system:subflow` node shows a **searchable picker** in the Property Panel
+  (`SubflowPicker` in `PropertyPanel.tsx`): the whole library
+  (`api.listSubflows` → `GET /api/pipelines?subflowsOnly=true`), each row showing
+  **name + description + "used by N"**, filterable, excluding the currently-open
+  workflow (no self-reference). Picking one sets `subflowId` (→ `refreshSubflowCache(true)`
+  → central schema-sync) and relabels the node to the subflow's name.
+
+### References & the "used by N" count
+- A parent references a subflow via a `system:subflow` node with
+  `settings.subflowId = <child id>`, embedded in the parent's `settings_json`.
+- `workflowsRepo.countReferences(ownerId, subflowId)` scans the owner's workflows for
+  that reference. Exposed at `GET /api/pipelines/:id/references` → `{ count, names[] }`,
+  and folded into the `subflowsOnly` list as `usedByCount`.
+
+### Deletion semantics
+- **Deleting a project keeps its subflows.** `projectsRepo.delete` only deletes regular
+  workflows (`is_subflow=0`) of that project and null-outs any subflow's `projectId` so
+  the DB-level FK cascade can't take it either. The project-delete confirmation copy says
+  so.
+- **Deleting a subflow that's still referenced warns but is allowed** (user's choice):
+  the delete flow fetches the reference count first and, if > 0, confirms with
+  "Used by N workflow(s) … delete anyway?". Referencing workflows then surface a
+  missing-subflow error until re-pointed. (Warn-but-allow, not hard-block.)
+
+---
+
+## 10. File map
 
 | Concern | File |
 |---|---|
@@ -216,7 +267,12 @@ placement all line up.
 | Grouping + save + re-expand | `apps/editor/src/store/workflow-store.ts` |
 | Editor-side expansion | `apps/editor/src/lib/schema-store.ts` (`expandNodesAndEdgesForSchema`) |
 | Proxy handle rendering | `apps/editor/src/components/nodes/CustomNodes.tsx` |
-| API client | `apps/editor/src/api/client.ts` |
-| Server expansion + CRUD + preview trigger | `apps/server/src/routes/pipelines.ts` (`expandSubflows`) |
+| Palette filter (hide boundary nodes) | `apps/editor/src/components/NodePalette.tsx` |
+| Subflow picker (searchable library) | `apps/editor/src/components/PropertyPanel.tsx` (`SubflowPicker`) |
+| Delete guard + project-delete copy | `apps/editor/src/components/Toolbar.tsx` |
+| API client | `apps/editor/src/api/client.ts` (`listSubflows`, `getReferences`) |
+| Server expansion + CRUD + preview + references + subflowsOnly | `apps/server/src/routes/pipelines.ts` |
+| Global list + reference count | `apps/server/src/db/repositories/workflows.repo.ts` (`listSubflows`, `countReferences`) |
+| Project-delete sparing subflows | `apps/server/src/db/repositories/projects.repo.ts` |
 | Metadata types | `packages/shared/src/types.ts` (`ISubflowParameter`, `IWorkflowMetadata`) |
 | Preview pipeline | `packages/execution/src/preview/generator.ts` (`generatePreviewPipeline`) |

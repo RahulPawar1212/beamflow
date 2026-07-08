@@ -599,7 +599,7 @@ function ProjectSwitcherModal({
     e.stopPropagation();
     // Typed confirm: deleting a project cascade-deletes all its workflows & subflows.
     const answer = prompt(
-      `Delete project "${p.name}"? This permanently deletes ALL its workflows and subflows.\n\nType the project name to confirm:`,
+      `Delete project "${p.name}"? This permanently deletes its workflows. Shared subflows are kept (they belong to your subflow library, not this project).\n\nType the project name to confirm:`,
     );
     if (answer !== p.name) {
       if (answer !== null) addToast('error', 'Name did not match — project not deleted');
@@ -760,7 +760,17 @@ function WorkflowSwitcherModal({
 
   const handleDelete = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
-    if (!confirm('Are you sure you want to delete this workflow?')) return;
+    // Warn-but-allow: if other workflows reference this (as a subflow), tell the
+    // user how many will break before they confirm.
+    let msg = 'Are you sure you want to delete this workflow?';
+    try {
+      const { count } = await api.getReferences(id);
+      if (count > 0) {
+        msg = `This is used by ${count} workflow${count === 1 ? '' : 's'} as a subflow. ` +
+          `Deleting it will leave ${count === 1 ? 'that workflow' : 'those workflows'} with a missing-subflow error. Delete anyway?`;
+      }
+    } catch { /* reference check is best-effort; fall back to the plain confirm */ }
+    if (!confirm(msg)) return;
     try {
       await api.deletePipeline(id);
       setPipelines((prev) => prev.filter((p) => p.id !== id));

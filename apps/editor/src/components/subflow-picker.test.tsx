@@ -1,27 +1,32 @@
 // @vitest-environment jsdom
 /**
- * Tests for Option C:
+ * Tests for the shared-subflow-library feature:
  *  (1) the palette hides system:subflow-input / -output but keeps system:subflow
- *  (2) selecting a system:subflow node renders a picker of the current project's
- *      subflows; choosing one sets subflowId and relabels the node.
+ *  (2) the Subflow node's picker is a searchable list of the user-GLOBAL subflow
+ *      library (all projects), showing name + description + "used by N";
+ *      choosing one sets subflowId and relabels the node; self is excluded.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen, cleanup, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, cleanup, waitFor, fireEvent, within } from '@testing-library/react';
 import { ReactFlowProvider } from '@xyflow/react';
 import type { NodeDef, PipelineSummary } from '../api/client';
 
-const PIPELINES: PipelineSummary[] = [
-  { id: 'wf_regular', name: 'Regular WF', isSubflow: false, createdAt: '', updatedAt: '', nodeCount: 2, connectionCount: 1 },
-  { id: 'sf_a', name: 'Subflow A', isSubflow: true, createdAt: '', updatedAt: '', nodeCount: 2, connectionCount: 1 },
-  { id: 'sf_b', name: 'Subflow B', isSubflow: true, createdAt: '', updatedAt: '', nodeCount: 3, connectionCount: 2 },
-  { id: 'self', name: 'This One', isSubflow: true, createdAt: '', updatedAt: '', nodeCount: 1, connectionCount: 0 },
+// listSubflows returns the global library (subflows only, with usedByCount).
+const SUBFLOWS: PipelineSummary[] = [
+  { id: 'sf_a', name: 'Clean CSV', description: 'trim + dedupe', isSubflow: true, usedByCount: 2, createdAt: '', updatedAt: '', nodeCount: 2, connectionCount: 1 },
+  { id: 'sf_b', name: 'Enrich', description: 'join lookups', isSubflow: true, usedByCount: 0, createdAt: '', updatedAt: '', nodeCount: 3, connectionCount: 2 },
+  { id: 'self', name: 'This One', isSubflow: true, usedByCount: 0, createdAt: '', updatedAt: '', nodeCount: 1, connectionCount: 0 },
 ];
 
 vi.mock('../api/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api/client')>();
   return {
     ...actual,
-    api: { ...actual.api, listPipelines: vi.fn(async () => ({ pipelines: PIPELINES })), getPipeline: vi.fn(async () => { throw new Error('x'); }) },
+    api: {
+      ...actual.api,
+      listSubflows: vi.fn(async () => ({ pipelines: SUBFLOWS })),
+      getPipeline: vi.fn(async () => { throw new Error('x'); }),
+    },
   };
 });
 
@@ -46,7 +51,7 @@ beforeEach(() => {
   useSchemaStore.getState().clearSchemas();
   useWorkflowStore.getState().setNodeDefinitions([SUBFLOW_DEF, INPUT_DEF, OUTPUT_DEF, CSV_DEF]);
   useWorkflowStore.getState().setCurrentProject('proj_1', 'Project 1');
-  (api.listPipelines as any).mockClear();
+  (api.listSubflows as any).mockClear();
 });
 
 describe('NodePalette hides subflow boundary nodes', () => {
@@ -59,7 +64,7 @@ describe('NodePalette hides subflow boundary nodes', () => {
   });
 });
 
-describe('Subflow node picker', () => {
+describe('Subflow picker (shared library)', () => {
   function addSubflowNode() {
     useWorkflowStore.setState({
       nodes: [
@@ -70,35 +75,38 @@ describe('Subflow node picker', () => {
     useWorkflowStore.getState().setSelectedNode('sf');
   }
 
-  it('lists only current-project subflows (excludes regular WFs and self)', async () => {
+  it('lists global subflows with description + used-by, excludes self', async () => {
     addSubflowNode();
     render(<PropertyPanel />);
 
-    // Picker is a combobox with the subflow options.
-    await waitFor(() => expect(screen.getByRole('combobox')).toBeInTheDocument());
-    const options = Array.from(screen.getByRole('combobox').querySelectorAll('option')).map((o) => o.textContent);
-    expect(options).toContain('Subflow A');
-    expect(options).toContain('Subflow B');
-    expect(options).not.toContain('Regular WF'); // not a subflow
-    expect(options).not.toContain('This One');   // self-reference excluded
+    await waitFor(() => expect(screen.getByText('Clean CSV')).toBeInTheDocument());
+    expect(screen.getByText('Enrich')).toBeInTheDocument();
+    expect(screen.getByText('trim + dedupe')).toBeInTheDocument(); // description shown
+    expect(screen.getByText('used by 2')).toBeInTheDocument();      // usage count shown
+    expect(screen.queryByText('This One')).toBeNull();              // self excluded
+    // Fetched from the GLOBAL library (not project-scoped).
+    expect(api.listSubflows).toHaveBeenCalled();
+  });
+
+  it('search filters the list', async () => {
+    addSubflowNode();
+    render(<PropertyPanel />);
+    await waitFor(() => expect(screen.getByText('Clean CSV')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByPlaceholderText('Search subflows…'), { target: { value: 'enrich' } });
+    expect(screen.queryByText('Clean CSV')).toBeNull();
+    expect(screen.getByText('Enrich')).toBeInTheDocument();
   });
 
   it('picking a subflow sets subflowId and relabels the node', async () => {
     addSubflowNode();
     render(<PropertyPanel />);
-    await waitFor(() => expect(screen.getByRole('combobox')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Clean CSV')).toBeInTheDocument());
 
-    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'sf_a' } });
+    fireEvent.click(screen.getByText('Clean CSV'));
 
     const node = useWorkflowStore.getState().nodes.find((n) => n.id === 'sf')!;
     expect(node.data.settings.subflowId).toBe('sf_a');
-    expect(node.data.label).toBe('Subflow A');
-  });
-
-  it('fetched subflows with includeSubflows scoped to the current project', async () => {
-    addSubflowNode();
-    render(<PropertyPanel />);
-    await waitFor(() => expect(api.listPipelines).toHaveBeenCalled());
-    expect(api.listPipelines).toHaveBeenCalledWith('proj_1', true);
+    expect(node.data.label).toBe('Clean CSV');
   });
 });

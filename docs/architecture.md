@@ -8,6 +8,7 @@ This document outlines the system architecture, design patterns, and data flow o
 - [projects.md](projects.md) — grouping workflows & subflows under user-owned projects.
 - [db-auth-architecture.md](db-auth-architecture.md) — SQL persistence (Drizzle/SQLite/Postgres) & user auth.
 - [preview-and-troubleshooting.md](preview-and-troubleshooting.md) — preview caching, cache states & debugging.
+- [debugging.md](debugging.md) — flow tracer, logs, per-action flow map & tests.
 - [apache-beam-execution-model.md](apache-beam-execution-model.md), [plugin-guide.md](plugin-guide.md).
 
 > **Note:** the Storage & Execution section below predates the SQL backend. Workflows are

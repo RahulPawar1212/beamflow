@@ -7,6 +7,7 @@
  */
 
 import type { PreviewRowsResponse } from '@beamflow/shared';
+import { trace } from '../lib/trace';
 
 /**
  * Base URL for API calls. Defaults to the relative `/api` (proxied to the
@@ -29,10 +30,14 @@ async function request<T>(
     headers['Authorization'] = `Bearer ${token}`;
   }
 
+  const method = options?.method ?? 'GET';
+  const traceToken = trace.api(method, path, options?.body ? { hasBody: true } : undefined);
+
   const res = await fetch(`${API_BASE}${path}`, {
     ...options,
     headers: { ...headers, ...options?.headers },
   });
+  trace.apiDone(method, path, res.status, traceToken);
 
   if (!res.ok) {
     if (res.status === 401) {

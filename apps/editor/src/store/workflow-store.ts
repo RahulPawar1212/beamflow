@@ -25,6 +25,7 @@ import {
 } from '../customNodes';
 import { api } from '../api/client';
 import { useSchemaStore } from '../lib/schema-store';
+import { trace } from '../lib/trace';
 
 // ─── Types ──────────────────────────────────────────────────────────
 
@@ -291,6 +292,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   },
 
   onConnect: (connection: Connection) => {
+    trace.group('onConnect', { source: connection.source, target: connection.target });
     get().pushHistory();
     const newEdgeId = `edge_${nanoid(8)}`;
     set({
@@ -309,6 +311,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
         useSchemaStore.getState().onEdgeAdded(connection.source, connection.target);
       }
     }
+    trace.groupEnd();
   },
 
   // ─── Node actions ───────────────────────────────────────────────
@@ -326,9 +329,10 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   setSelectedNode: (id) => set({ selectedNodeId: id }),
 
   addNode: (type, position) => {
+    trace.group('addNode', { type });
     const state = get();
     const def = state.nodeDefinitions.find((d) => d.type === type);
-    if (!def) return;
+    if (!def) { trace.groupEnd(); return; }
 
     state.pushHistory();
 
@@ -366,9 +370,11 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     if (newNode.data.nodeType === 'system:subflow') {
       get().refreshSubflowCache();
     }
+    trace.groupEnd();
   },
 
   updateNodeSettings: (nodeId, settings) => {
+    trace.group('updateNodeSettings', { nodeId, keys: Object.keys(settings) });
     const state = get();
     state.pushHistory();
     const updatedNodes = state.nodes.map((n) =>
@@ -403,6 +409,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
             edges.map((e) => ({ id: e.id, source: e.source, target: e.target, sourceHandle: e.sourceHandle, targetHandle: e.targetHandle })),
           );
         }
+        trace.groupEnd();
         return;
       }
 
@@ -412,6 +419,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
         { ...updatedNode.data.settings, ...settings },
       );
     }
+    trace.groupEnd();
   },
 
   updateNodeLabel: (nodeId, label) => {
@@ -426,6 +434,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   },
 
   removeNode: (nodeId) => {
+    trace.action('removeNode', { nodeId });
     const state = get();
     state.pushHistory();
     // Collect edges that will be removed (for schema cleanup)
@@ -547,6 +556,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
 
   createSubflowFromSelection: async (name) => {
     const state = get();
+    trace.action('createSubflowFromSelection', { name, selected: state.nodes.filter((n) => n.selected).length });
     const selected = state.nodes.filter((n) => n.selected);
     if (selected.length < 1) {
       return { ok: false, error: 'Select at least 1 node to group.' };
@@ -754,6 +764,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
 
   saveWorkflow: async (): Promise<boolean> => {
     const state = get();
+    trace.action('saveWorkflow', { pipelineId: state.pipelineId, isSubflow: state.isSubflow, project: state.currentProjectId });
     state.setSaving(true);
     try {
       const workflow = state.toWorkflow();
@@ -855,6 +866,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   },
 
   loadWorkflow: (workflow, clearStack = true) => {
+    trace.action('loadWorkflow', { id: workflow.metadata.id, name: workflow.metadata.name, nodes: workflow.nodes.length });
     const state = get();
     // Determine the active nodes and edges.
     // If navigationStack has items, we're inside a subflow, so don't overwrite
@@ -907,6 +919,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   refreshSubflowCache: async (force = false) => {
     const { nodes } = get();
     const subflowNodes = nodes.filter(n => n.data?.nodeType === 'system:subflow');
+    trace.action('refreshSubflowCache', { force, subflowNodes: subflowNodes.length });
     if (subflowNodes.length === 0) return;
 
     // Fetch all needed subflows
@@ -978,6 +991,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   // === Subflow Navigation ====================================================
 
   enterSubflow: (subflow) => {
+    trace.action('enterSubflow', { id: subflow.metadata.id, name: subflow.metadata.name });
     const state = get();
     // 1. Save current state to navigation stack
     const currentEntry: NavigationStackEntry = {
@@ -998,6 +1012,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   },
 
   exitSubflow: () => {
+    trace.action('exitSubflow', { depth: get().navigationStack.length });
     const state = get();
     if (state.navigationStack.length === 0) return;
 

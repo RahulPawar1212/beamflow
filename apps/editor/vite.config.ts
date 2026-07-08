@@ -20,10 +20,14 @@ export default defineConfig({
       },
     },
   },
-  // Unit tests (Vitest). The API client test only mocks `fetch`, so the plain
-  // Node environment suffices — no jsdom needed.
+  // Unit + component tests (Vitest).
+  //  - Default environment is `node` (fast) for store/schema/API `*.test.ts`.
+  //  - Component tests are `*.test.tsx` and opt into jsdom via a per-file
+  //    `// @vitest-environment jsdom` docblock; setup.ts provides jest-dom
+  //    matchers and the DOM stubs React Flow needs.
   test: {
     environment: 'node',
-    include: ['src/**/*.test.ts'],
+    include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
+    setupFiles: ['./src/test/setup.ts'],
   },
 });

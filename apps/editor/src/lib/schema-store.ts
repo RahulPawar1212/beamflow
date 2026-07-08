@@ -35,6 +35,7 @@ import type {
 } from '@beamflow/schema';
 import { registerBuiltinSchemaNodes } from '@beamflow/nodes';
 import { useWorkflowStore } from '../store/workflow-store';
+import { trace } from './trace';
 
 // ─── One-time registration of built-in schema node factories ─────────────────
 // This runs once when the module is first imported.
@@ -263,12 +264,8 @@ export const useSchemaStore = create<SchemaStoreState>((set, get) => {
 
     const issues = schemaNode?.validateSchema(inputSchemas) ?? [];
 
-    // Log the schema change in development so developers can see it working
-    console.info(`[Schema Engine] Node "${event.nodeId}" updated:`, {
-      columns: event.schema.columns.map((c) => `${c.name} (${c.type})`),
-      issuesCount: issues.length,
-      issues
-    });
+    // Trace the schema recompute (only when the flow tracer is enabled).
+    trace.schema(event.nodeId, event.schema.columns.map((c) => `${c.name}:${c.type}`));
 
     // Also update lineage
     lineageTracker.indexSchema(event.nodeId, event.schema);

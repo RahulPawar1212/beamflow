@@ -52,37 +52,50 @@ node's recomputed output columns.
   path, status, ms). `uploadFile` is the one call that bypasses this wrapper.
 
 The tracer lives in `apps/editor/src/lib/trace.ts`. To trace something new, import
-`trace` and call `trace.action('name', detail)` or wrap effects in
-`trace.group('name'); …; trace.groupEnd();`.
+`trace` and call `trace.action('name', detail)`.
 
 ---
 
 ## 2. Reading the flow: what each UI action does
 
-When a UI action "doesn't update", these are the internal steps to expect. If the
-trace stops early, the break is at that step.
+Store actions just **mutate the graph** (`nodes` / `edges` / `subflowCache`). Schema
+recompute is **not** triggered by the actions themselves — a single central subscriber
+(`apps/editor/src/lib/schema-sync.ts`) watches the store and re-syncs whenever a
+schema-relevant part of the graph changes. So a trace of one action reads:
 
-| UI action | Store action | Key effects (in order) |
+```
+[Trace] action <name> …            ← the action mutated the graph
+[Trace] ▼ schemaSync (central)     ← the ONE subscriber fired (microtask later)
+[Trace]   schema <nodeId> = […]    ← each recomputed node
+```
+
+| UI action | Store action | What it mutates (schema resyncs centrally after) |
 |---|---|---|
-| Drag a node from palette | `addNode` | pushHistory → add node → `syncFromWorkflow` (full schema rebuild) → if subflow, `refreshSubflowCache` |
-| Draw an edge | `onConnect` | pushHistory → add edge → **if source is a subflow** `refreshSubflowCache` (full re-sync) **else** `onEdgeAdded` (incremental) |
-| Edit a setting in the panel | `updateNodeSettings` | pushHistory → merge settings → **subflow node**: full `syncFromWorkflow` (+ refetch on `subflowId`); **other**: `onNodeSettingsChanged` (incremental) |
-| Delete a node | `removeNode` | pushHistory → drop node + edges → `syncFromWorkflow` |
-| Save (Ctrl+S / button) | `saveWorkflow` | `toWorkflow()` → `PUT` (existing) or `POST` (new, stamps `projectId`, `isSubflow`) |
-| Open a workflow | `loadWorkflow` | map DTO → set nodes/edges → reset history → `refreshSubflowCache` |
-| New Workflow | `clearWorkflow` | reset pipelineId/name/**isSubflow**/params/navStack + graph → `clearSchemas` |
-| Group as node | `createSubflowFromSelection` | build sub-workflow → `POST` (isSubflow, projectId) → replace selection with proxy → `syncFromWorkflow` → `refreshSubflowCache` |
-| Double-click a subflow node | `enterSubflow` | push nav stack → `loadWorkflow(child, clearStack=false)` |
-| Breadcrumb back | `exitSubflow` | pop nav stack → restore parent → `syncFromWorkflow` → `refreshSubflowCache(true)` |
-| Switch project | `setCurrentProject` + `clearWorkflow` | set project → blank canvas (open pipeline belonged to old project) |
+| Drag a node from palette | `addNode` | adds node; if subflow, `refreshSubflowCache` (fetch → cache bump) |
+| Draw an edge | `onConnect` | adds edge; if source is a subflow, `refreshSubflowCache` |
+| Edit a setting | `updateNodeSettings` | merges settings; if subflow `subflowId` changed, `refreshSubflowCache(true)` |
+| Delete a node | `removeNode` / `removeSelectedNodes` / `onNodesChange(remove)` | drops node + edges |
+| Delete an edge | `onEdgesChange(remove)` | drops edge |
+| Undo / Redo | `undo` / `redo` | restores a graph snapshot |
+| Save (Ctrl+S) | `saveWorkflow` | `PUT` (existing) or `POST` (new; stamps `projectId`, `isSubflow`) — no schema effect |
+| Open a workflow | `loadWorkflow` | sets nodes/edges + `refreshSubflowCache` |
+| New Workflow | `clearWorkflow` | empties graph (+ explicit `clearSchemas`) |
+| Group as node | `createSubflowFromSelection` | replaces selection with a proxy + `refreshSubflowCache` |
+| Enter / exit subflow | `enterSubflow` / `exitSubflow` | swaps the canvas graph |
+| Switch project | `setCurrentProject` + `clearWorkflow` | blank canvas |
 
 ### The golden rule of schema updates
-Schema only propagates correctly after a **full `syncFromWorkflow`** (which re-inlines
-subflows). The incremental paths (`onEdgeAdded`, `onNodeSettingsChanged`) do **not**
-re-inline subflows. Any action that touches a subflow boundary must route through
-`refreshSubflowCache`/`syncFromWorkflow` — this is the root cause of past "empty column
-dropdown" bugs. If a downstream node shows no columns, check the trace for a `schema`
-line for that node; if it's missing or empty, a re-sync didn't fire.
+Schema is a **pure function of `{nodes, edges, subflowCache}`**, resynced from ONE place
+(`schema-sync.ts`). An action never needs to "trigger" schema — it just mutates the graph.
+The subscriber recomputes on a **schema-relevant fingerprint change** (node id/type/
+settings, edge endpoints/handles, `subflowCacheVersion`) and skips cosmetic churn
+(drag/selection). `subflowCache` is a hidden input to expansion, so fetching a subflow
+bumps `subflowCacheVersion` to force a resync.
+
+If a downstream node shows no columns: turn on the tracer and look for
+`schema <nodeId> = […]`. Empty/missing → the fingerprint didn't change (did the graph
+actually change?), or the subflow cache isn't populated (look for a `refreshSubflowCache`
+action and its `GET /pipelines/:id` fetch in the trace).
 
 ---
 

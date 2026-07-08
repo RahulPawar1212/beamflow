@@ -13,6 +13,10 @@ import { useAuthStore } from './lib/auth-store.js';
 import { LoginPage } from './components/LoginPage.js';
 import { SettingsModal } from './components/SettingsModal.js';
 import { api } from './api/client.js';
+// Importing the schema store installs the central schema-propagation subscriber
+// (schema recomputes whenever {nodes, edges, subflowCache} changes — no store
+// action triggers it). See lib/schema-sync.ts and docs/debugging.md.
+import './lib/schema-store.js';
 
 export default function App() {
   const token = useAuthStore((s) => s.token);

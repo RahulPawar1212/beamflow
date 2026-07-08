@@ -180,27 +180,22 @@ describe('subflow schema propagation — regression guards', () => {
       .flatMap((e) => schemas.get(e.source)?.outputSchema.columns.map((c) => c.name) ?? []);
   }
 
-  // BUG 1: refreshSubflowCache used to re-sync the schema engine ONLY when it
-  // fetched a new subflow (hasNew). On a reload where the cache is already warm,
-  // no fetch happens, so the full re-expansion never ran and downstream columns
-  // stayed empty. This asserts a warm-cache refresh still propagates.
-  it('warm cache (no new fetch) still propagates columns to downstream', async () => {
-    // First load warms the cache.
+  // Centralization guarantee: after a load the downstream columns are present,
+  // and reloading the same workflow again (warm cache, no new fetch) still ends
+  // with correct columns. Under the central subscriber, schema is a pure function
+  // of the graph — there is no path where the engine is left unsynced.
+  it('reloading with a warm cache still ends with downstream columns', async () => {
     useWorkflowStore.getState().loadWorkflow(parentWorkflow);
     await flush();
+    expect(filterInputColumns()).toEqual(EXPECTED);
     expect(useWorkflowStore.getState().subflowCache['child_1']).toBeTruthy();
 
-    // Clear only the engine's schema state, keep the warm subflowCache.
-    useSchemaStore.getState().clearSchemas();
     getPipelineMock.mockClear();
-
-    // A refresh with the cache already populated must NOT fetch again, but MUST
-    // still re-run syncFromWorkflow so columns reappear.
-    await useWorkflowStore.getState().refreshSubflowCache();
+    // Reload the identical workflow — cache is warm, so no refetch.
+    useWorkflowStore.getState().loadWorkflow(parentWorkflow);
     await flush();
-
-    expect(getPipelineMock).not.toHaveBeenCalled(); // proves cache was warm
-    expect(filterInputColumns()).toEqual(EXPECTED);  // proves it re-synced anyway
+    expect(getPipelineMock).not.toHaveBeenCalled();
+    expect(filterInputColumns()).toEqual(EXPECTED);
   });
 
   // BUG 2: connecting an edge FROM a subflow node went through the incremental

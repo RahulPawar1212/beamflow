@@ -36,6 +36,7 @@ import type {
 import { registerBuiltinSchemaNodes } from '@beamflow/nodes';
 import { useWorkflowStore } from '../store/workflow-store';
 import { trace } from './trace';
+import { registerSchemaSync, installSchemaSync } from './schema-sync';
 
 // ─── One-time registration of built-in schema node factories ─────────────────
 // This runs once when the module is first imported.
@@ -87,28 +88,6 @@ interface SchemaStoreState {
    * triggers a full recomputation.
    */
   syncFromWorkflow: (nodes: WorkflowNode[], edges: WorkflowEdge[]) => void;
-
-  /**
-   * Notify the schema engine that a specific node's settings have changed.
-   * Triggers recomputation of that node and all its downstream nodes only.
-   */
-  onNodeSettingsChanged: (
-    nodeId: string,
-    nodeType: string,
-    newSettings: Record<string, unknown>,
-  ) => void;
-
-  /**
-   * Notify the schema engine that an edge was added.
-   * Triggers recomputation of the target node and its descendants.
-   */
-  onEdgeAdded: (sourceNodeId: string, targetNodeId: string) => void;
-
-  /**
-   * Notify the schema engine that an edge was removed.
-   * Triggers recomputation of the former target node and its descendants.
-   */
-  onEdgeRemoved: (sourceNodeId: string, targetNodeId: string) => void;
 
   /** Get the output schema for a node (or an empty schema if not computed). */
   getSchema: (nodeId: string) => PipelineSchema;
@@ -281,19 +260,17 @@ export const useSchemaStore = create<SchemaStoreState>((set, get) => {
     engine,
 
     syncFromWorkflow: (nodes, edges) => {
-      // Clear and rebuild
+      // Full rebuild. Reset the schemas map too, so nodes that no longer exist
+      // don't leave a stale entry behind (the engine only re-emits for current
+      // nodes; deleted ones would otherwise keep their last computed schema).
       engine.clear();
       lineageTracker.clear();
       nodeTypeMap.clear();
       nodeSettingsMap.clear();
       edgeMap.length = 0;
+      set({ schemas: new Map() });
 
-      // Import workflow-store here to avoid circular dependency
-      // or just pull it from the global window object if possible.
-      // Wait, we can't easily access subflowCache without circular deps if not careful.
-      // Let's import it dynamically or just let caller pass subflowCache?
-      // Since syncFromWorkflow is called from workflow-store, workflow-store can't easily pass it.
-      // Actually, we can import useWorkflowStore.
+      // subflowCache is a hidden input to expansion; read it from the store.
       const subflowCache = useWorkflowStore.getState().subflowCache;
 
       const { expandedNodes, expandedEdges } = expandNodesAndEdgesForSchema(
@@ -340,32 +317,6 @@ export const useSchemaStore = create<SchemaStoreState>((set, get) => {
       engine.recomputeAll();
     },
 
-    onNodeSettingsChanged: (nodeId, nodeType, newSettings) => {
-      nodeSettingsMap.set(nodeId, newSettings);
-      nodeTypeMap.set(nodeId, nodeType);
-
-      const schemaNode = schemaNodeRegistry.create(nodeType, nodeId, newSettings);
-      if (schemaNode) {
-        engine.registerNode(schemaNode);
-      }
-      engine.invalidateFrom(nodeId);
-    },
-
-    onEdgeAdded: (sourceNodeId, targetNodeId) => {
-      engine.addEdge(sourceNodeId, targetNodeId);
-      edgeMap.push([sourceNodeId, targetNodeId]);
-      engine.invalidateFrom(targetNodeId);
-    },
-
-    onEdgeRemoved: (sourceNodeId, targetNodeId) => {
-      engine.removeEdge(sourceNodeId, targetNodeId);
-      const idx = edgeMap.findIndex(
-        ([s, t]) => s === sourceNodeId && t === targetNodeId,
-      );
-      if (idx !== -1) edgeMap.splice(idx, 1);
-      engine.invalidateFrom(targetNodeId);
-    },
-
     getSchema: (nodeId) => {
       return get().schemas.get(nodeId)?.outputSchema ?? emptySchema();
     },
@@ -396,6 +347,13 @@ export const useSchemaStore = create<SchemaStoreState>((set, get) => {
 const nodeTypeMap = new Map<string, string>();
 const nodeSettingsMap = new Map<string, Record<string, unknown>>();
 const edgeMap: [string, string][] = [];
+
+// Wire the central schema-sync subscriber (lib/schema-sync.ts). Registering the
+// full-rebuild function here (rather than schema-sync importing this store)
+// breaks the import cycle. Installing at module load means the subscriber is
+// active as soon as the schema store is imported — in the app and in tests.
+registerSchemaSync((nodes, edges) => useSchemaStore.getState().syncFromWorkflow(nodes, edges));
+installSchemaSync();
 
 // ─── Convenience hooks ────────────────────────────────────────────────────────
 

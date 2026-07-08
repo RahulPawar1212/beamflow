@@ -34,13 +34,8 @@ Each canvas node implements the `ISchemaNode` interface to calculate its own col
 - [join.schema.ts](file:///c:/Users/rahul.pawar/source/repos/beamflow/packages/nodes/src/schema/join.schema.ts) — Combines schemas from left and right incoming branches.
 
 ### C. UI Zustand Hook Store (`apps/editor/src/lib/`)
-- [schema-store.ts](file:///c:/Users/rahul.pawar/source/repos/beamflow/apps/editor/src/lib/schema-store.ts) — Zustand store that subscribes to node edits on the canvas and triggers selective invalidations:
-  ```typescript
-  // Triggered when any node settings or edges change
-  onNodeSettingsChanged(nodeId, type, settings) {
-     engine.invalidateFrom(nodeId);
-  }
-  ```
+- [schema-store.ts](file:///c:/Users/rahul.pawar/source/repos/beamflow/apps/editor/src/lib/schema-store.ts) — Zustand store wrapping the engine. Its `syncFromWorkflow(nodes, edges)` does a full rebuild (reads `subflowCache`, inlines subflows, `engine.recomputeAll()`).
+- [schema-sync.ts](file:///c:/Users/rahul.pawar/source/repos/beamflow/apps/editor/src/lib/schema-sync.ts) — **the single trigger.** Rather than each store action calling `syncFromWorkflow`, one subscriber watches the workflow store and re-syncs whenever a *schema-relevant* fingerprint changes (node id/type/settings, edge endpoints/handles, `subflowCacheVersion`). Cosmetic churn (drag/selection) is ignored. This makes schema a pure function of `{nodes, edges, subflowCache}` and is why "empty dropdown" bugs from a forgotten trigger can't recur. See [debugging.md](debugging.md).
 
 ---
 
@@ -48,7 +43,7 @@ Each canvas node implements the `ISchemaNode` interface to calculate its own col
 
 When the visual editor loads or changes:
 
-1. **Trigger:** User adds a link or modifies settings. `workflow-store` invokes `schema-store`'s change listeners.
+1. **Trigger:** a store action mutates `nodes`/`edges`/`subflowCache`. The central subscriber in `schema-sync.ts` detects the schema-relevant change and calls `syncFromWorkflow` (microtask-debounced).
 2. **Topological Order:** The engine sorts the graph using **Kahn's Topological Sort** starting from the source nodes.
 3. **Invalidation:** Descendants of the modified node are marked stale in the cache.
 4. **Calculations:** The engine traverses downstream nodes. For each node, it takes the output schemas of upstream dependencies, feeds them as input, and calls:

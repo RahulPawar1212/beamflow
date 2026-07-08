@@ -107,11 +107,8 @@ export function PropertyPanel() {
         console.error('Auto schema detection failed:', err);
       }
     }
-    
-    // Refresh subflow cache if subflowId changes
-    if (selectedNode.data.nodeType === 'system:subflow' && key === 'subflowId') {
-      useWorkflowStore.getState().refreshSubflowCache();
-    }
+    // Note: subflowId changes are handled by updateNodeSettings (it fetches the
+    // subflow and the central schema subscriber re-syncs) — no extra call here.
   };
 
   return (

@@ -193,6 +193,10 @@ interface WorkflowState {
 
   // Subflow Schema Cache
   subflowCache: Record<string, SerializedWorkflowDTO>;
+  // Bumped whenever subflowCache is (re)populated. Part of the schema
+  // fingerprint (see lib/schema-sync.ts) so a cache refresh re-syncs schema
+  // even when nodes/edges are unchanged.
+  subflowCacheVersion: number;
   refreshSubflowCache: (force?: boolean) => Promise<void>;
 
   // Pipeline Parameters
@@ -219,6 +223,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   historyIndex: -1,
   navigationStack: [],
   subflowCache: {},
+  subflowCacheVersion: 0,
   isGenerating: false,
   isExecuting: false,
   isSaving: false,
@@ -292,26 +297,21 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   },
 
   onConnect: (connection: Connection) => {
-    trace.group('onConnect', { source: connection.source, target: connection.target });
+    trace.action('onConnect', { source: connection.source, target: connection.target });
     get().pushHistory();
     const newEdgeId = `edge_${nanoid(8)}`;
     set({
       edges: addEdge({ ...connection, id: newEdgeId }, get().edges),
       isDirty: true,
     });
-    // Schema propagation: notify the schema engine of the new edge.
-    if (connection.source && connection.target) {
+    // Schema resync is handled centrally (lib/schema-sync.ts) — the new edge
+    // changes the schema fingerprint, which triggers one rebuild. If the source
+    // is a subflow whose definition isn't cached yet, fetch it; the cache-version
+    // bump then drives the resync.
+    if (connection.source) {
       const srcNode = get().nodes.find((n) => n.id === connection.source);
-      if (srcNode?.data?.nodeType === 'system:subflow') {
-        // Edges from a subflow proxy need a full re-sync: the incremental path
-        // doesn't (re)inline the subflow internals, so the downstream node would
-        // otherwise receive an empty schema. refreshSubflowCache re-runs syncFromWorkflow.
-        get().refreshSubflowCache();
-      } else {
-        useSchemaStore.getState().onEdgeAdded(connection.source, connection.target);
-      }
+      if (srcNode?.data?.nodeType === 'system:subflow') get().refreshSubflowCache();
     }
-    trace.groupEnd();
   },
 
   // ─── Node actions ───────────────────────────────────────────────
@@ -329,10 +329,10 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   setSelectedNode: (id) => set({ selectedNodeId: id }),
 
   addNode: (type, position) => {
-    trace.group('addNode', { type });
+    trace.action('addNode', { type });
     const state = get();
     const def = state.nodeDefinitions.find((d) => d.type === type);
-    if (!def) { trace.groupEnd(); return; }
+    if (!def) return;
 
     state.pushHistory();
 
@@ -359,22 +359,15 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
 
     set({ nodes: [...state.nodes, newNode], selectedNodeId: newNode.id, isDirty: true });
 
-    // Ensure the new node is registered in the schema engine
-    const { nodes, edges } = get();
-    useSchemaStore.getState().syncFromWorkflow(
-      nodes.map((n) => ({ id: n.id, nodeType: n.data.nodeType, settings: n.data.settings })),
-      edges.map((e) => ({ id: e.id, source: e.source, target: e.target, sourceHandle: e.sourceHandle, targetHandle: e.targetHandle })),
-    );
-
-    // If a subflow was added, we must fetch it so the schema engine can expand it
+    // Schema resync is central (lib/schema-sync.ts). If a subflow was added,
+    // fetch its definition so it can be inlined; the cache bump drives the sync.
     if (newNode.data.nodeType === 'system:subflow') {
       get().refreshSubflowCache();
     }
-    trace.groupEnd();
   },
 
   updateNodeSettings: (nodeId, settings) => {
-    trace.group('updateNodeSettings', { nodeId, keys: Object.keys(settings) });
+    trace.action('updateNodeSettings', { nodeId, keys: Object.keys(settings) });
     const state = get();
     state.pushHistory();
     const updatedNodes = state.nodes.map((n) =>
@@ -383,43 +376,15 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
         : n,
     );
     set({ nodes: updatedNodes, isDirty: true });
-    
-    const updatedNode = updatedNodes.find((n) => n.id === nodeId);
-    if (updatedNode) {
-      if (updatedNode.data.nodeType === 'system:subflow') {
-        // A subflow node's settings (subflowId or an exposed parameter value) affect the
-        // inlined internal nodes, whose schema is only recomputed during full expansion.
-        // The incremental onNodeSettingsChanged only touches the single proxy node, so we
-        // must re-run syncFromWorkflow. If subflowId changed we may also need to fetch a
-        // newly-referenced subflow first.
-        if ('subflowId' in settings) {
-          // refreshSubflowCache re-syncs after fetching; force a re-sync even if the
-          // subflow was already cached so parameter/id changes always re-expand.
-          get().refreshSubflowCache().then(() => {
-            const { nodes, edges } = get();
-            useSchemaStore.getState().syncFromWorkflow(
-              nodes.map((n) => ({ id: n.id, nodeType: n.data.nodeType, settings: n.data.settings })),
-              edges.map((e) => ({ id: e.id, source: e.source, target: e.target, sourceHandle: e.sourceHandle, targetHandle: e.targetHandle })),
-            );
-          });
-        } else {
-          const { nodes, edges } = get();
-          useSchemaStore.getState().syncFromWorkflow(
-            nodes.map((n) => ({ id: n.id, nodeType: n.data.nodeType, settings: n.data.settings })),
-            edges.map((e) => ({ id: e.id, source: e.source, target: e.target, sourceHandle: e.sourceHandle, targetHandle: e.targetHandle })),
-          );
-        }
-        trace.groupEnd();
-        return;
-      }
 
-      useSchemaStore.getState().onNodeSettingsChanged(
-        nodeId,
-        updatedNode.data.nodeType,
-        { ...updatedNode.data.settings, ...settings },
-      );
+    // Schema resync is central: the settings change alters the schema fingerprint
+    // and triggers one rebuild. If a subflow node was re-pointed at a different
+    // child, fetch that child's definition (force, so a re-point to an already-
+    // cached id still bumps the cache version and re-inlines).
+    const updatedNode = updatedNodes.find((n) => n.id === nodeId);
+    if (updatedNode?.data.nodeType === 'system:subflow' && 'subflowId' in settings) {
+      get().refreshSubflowCache(true);
     }
-    trace.groupEnd();
   },
 
   updateNodeLabel: (nodeId, label) => {
@@ -437,20 +402,14 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     trace.action('removeNode', { nodeId });
     const state = get();
     state.pushHistory();
-    // Collect edges that will be removed (for schema cleanup)
-    const removedEdges = state.edges.filter((e) => e.source === nodeId || e.target === nodeId);
     set({
       nodes: state.nodes.filter((n) => n.id !== nodeId),
       edges: state.edges.filter((e) => e.source !== nodeId && e.target !== nodeId),
       selectedNodeId: state.selectedNodeId === nodeId ? null : state.selectedNodeId,
       isDirty: true,
     });
-    // Schema propagation: rebuild after node removal
-    const { nodes, edges } = get();
-    useSchemaStore.getState().syncFromWorkflow(
-      nodes.map((n) => ({ id: n.id, nodeType: n.data.nodeType, settings: n.data.settings })),
-      edges.map((e) => ({ id: e.id, source: e.source, target: e.target, sourceHandle: e.sourceHandle, targetHandle: e.targetHandle })),
-    );
+    // Schema resync is central (lib/schema-sync.ts) — removing the node/edges
+    // changes the fingerprint and triggers one rebuild.
   },
 
   removeSelectedNodes: () => {
@@ -709,13 +668,8 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       isDirty: true,
     });
 
-    const { nodes, edges } = get();
-    useSchemaStore.getState().syncFromWorkflow(
-      nodes.map((n) => ({ id: n.id, nodeType: n.data.nodeType, settings: n.data.settings })),
-      edges.map((e) => ({ id: e.id, source: e.source, target: e.target, sourceHandle: e.sourceHandle, targetHandle: e.targetHandle })),
-    );
-
-    // Fetch the newly created subflow so it can be expanded for schema propagation
+    // Fetch the new subflow's definition so it can be inlined; the cache bump
+    // drives the central schema resync (lib/schema-sync.ts).
     get().refreshSubflowCache();
 
     return { ok: true };
@@ -919,17 +873,9 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       lastSavedAt: workflow.metadata.updatedAt,
     }));
 
-    // Sync the schema engine with the freshly loaded graph. This MUST happen
-    // unconditionally — refreshSubflowCache below early-returns when there are
-    // no subflow nodes, so relying on it alone left subflow-free workflows
-    // (e.g. CSV Source → Filter) with an unsynced engine and empty downstream
-    // column dropdowns on load.
-    useSchemaStore.getState().syncFromWorkflow(
-      nodes.map((n) => ({ id: n.id, nodeType: n.data.nodeType, settings: n.data.settings })),
-      edges.map((e) => ({ id: e.id, source: e.source, target: e.target, sourceHandle: e.sourceHandle, targetHandle: e.targetHandle })),
-    );
-
-    // Fetch any referenced subflows and re-sync once their definitions are cached.
+    // Loading a new graph changes the schema fingerprint → the central subscriber
+    // (lib/schema-sync.ts) rebuilds the engine. Then fetch any referenced subflow
+    // definitions; the cache bump drives a second resync once they're inlined.
     get().refreshSubflowCache();
   },
 
@@ -958,22 +904,11 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       }
     }
 
-    if (hasNew) set({ subflowCache: cache });
-
-    // Always re-run a full schema sync when subflow nodes are present — not only
-    // when we fetched something new. Incremental edge/settings updates don't
-    // re-expand the inlined subflow internals, so without this the downstream
-    // schema (e.g. a Filter's column dropdown) stays empty even though the cache
-    // holds the child definition. syncFromWorkflow reads subflowCache itself.
-    const { nodes: currentNodes, edges: currentEdges } = get();
-    useSchemaStore.getState().syncFromWorkflow(
-      currentNodes.map(n => ({
-        id: n.id,
-        nodeType: n.data.nodeType,
-        settings: n.data.settings
-      })),
-      currentEdges.map(e => ({ id: e.id, source: e.source, target: e.target, sourceHandle: e.sourceHandle, targetHandle: e.targetHandle }))
-    );
+    // Bump the cache version whenever definitions changed. The central schema
+    // subscriber (lib/schema-sync.ts) sees the version change and re-syncs — we
+    // no longer call syncFromWorkflow here. This keeps schema a pure function of
+    // {nodes, edges, subflowCache} driven from ONE place.
+    if (hasNew) set((s) => ({ subflowCache: cache, subflowCacheVersion: s.subflowCacheVersion + 1 }));
   },
 
   clearWorkflow: () => {
@@ -1050,13 +985,9 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       isDirty: false, // Could compute this if we wanted to retain parent dirty state
     });
 
-    // 3. Sync schema propagation
-    useSchemaStore.getState().syncFromWorkflow(
-      parentEntry.nodes.map((n) => ({ id: n.id, nodeType: n.data.nodeType, settings: n.data.settings })),
-      parentEntry.edges.map((e) => ({ id: e.id, source: e.source, target: e.target, sourceHandle: e.sourceHandle, targetHandle: e.targetHandle }))
-    );
-
-    // 4. Force refresh subflow cache so parent sees our saved changes
+    // Restoring the parent graph changes the fingerprint → central resync.
+    // Force-refresh the subflow cache so the parent picks up edits made inside
+    // the child; the cache bump drives a second resync.
     get().refreshSubflowCache(true);
   },
 

@@ -34,6 +34,32 @@ export interface IRPipeline {
 }
 
 /**
+ * A parameter exposed by a composite (subflow) step, surfaced as a
+ * constructor argument on the generated PTransform subclass.
+ */
+export interface IRCompositeParameter {
+  /** Stable id — matches the source ISubflowParameter.id. */
+  readonly id: string;
+  /** Human-readable name (used as the constructor kwarg name). */
+  readonly name: string;
+  readonly type: 'string' | 'number' | 'boolean' | 'enum';
+  /** Value to use when the usage site doesn't override it. */
+  readonly defaultValue: unknown;
+  /** Internal step (within subPipeline) whose param this parameter drives. */
+  readonly targetStepId: string;
+  /** The param key on that internal step. */
+  readonly targetParamKey: string;
+}
+
+/** One resolved output of a composite step's internal pipeline. */
+export interface IRCompositeOutput {
+  /** Internal step id (within subPipeline.steps) whose output this is. */
+  readonly sourceStepId: string;
+  /** Output name as seen from the parent, when explicitly named. */
+  readonly name?: string;
+}
+
+/**
  * A single step in the IR pipeline.
  * Maps to one Beam PTransform in the generated code.
  */
@@ -57,10 +83,44 @@ export interface IRStep {
   /** IDs of steps that this step depends on (input data sources). */
   readonly inputs: string[];
   /**
+   * For each entry in `inputs`, the named output of that step to consume
+   * (parallel array). Undefined/omitted entry = the step's single/default
+   * output. Only meaningful when the referenced input step is a
+   * multi-output composite (`compositeOutputs.length > 1`) — the generator
+   * emits `stepVar['<name>']` instead of `stepVar` for such an entry.
+   */
+  readonly inputOutputKeys?: ReadonlyArray<string | undefined>;
+  /**
    * Required language-specific imports.
    * Example: ['apache_beam.io', 'apache_beam.transforms']
    */
   readonly imports: string[];
+
+  /**
+   * The subflow's own nested IR pipeline. Present only for composite
+   * (subflow) steps — its presence is the sole discriminator for "this step
+   * compiles to a PTransform subclass with a nested expand() body" rather
+   * than a leaf operation. Absent for ordinary/leaf steps.
+   */
+  readonly subPipeline?: IRPipeline;
+  /** Exposed parameters (constructor args) for the generated PTransform. */
+  readonly compositeParams?: readonly IRCompositeParameter[];
+  /** This usage site's override values, keyed by IRCompositeParameter.id. */
+  readonly compositeParamOverrides?: Record<string, unknown>;
+  /**
+   * Resolved output routing(s) inside subPipeline. One entry = a single
+   * return value; more than one = a dict/tuple return.
+   */
+  readonly compositeOutputs?: readonly IRCompositeOutput[];
+  /**
+   * Names of the composite's declared inputs, in expand()'s dict-key order.
+   * Length 1 is the common single-input case.
+   */
+  readonly compositeInputNames?: readonly string[];
+  /** Human-readable source name (the subflow's name), for class naming. */
+  readonly compositeSourceName?: string;
+  /** The originating subflow document id — the class-key/dedup basis. */
+  readonly compositeSourceId?: string;
 }
 
 /**

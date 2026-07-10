@@ -94,36 +94,55 @@ The main pipeline **list** (`GET /api/pipelines`) hides subflows by default; pas
 
 ---
 
-## 4. Expansion — inlining a subflow
+## 4. Two paths: flatten for preview/schema, compile to PTransform for code
 
-A subflow is never executed as a black box; it is **inlined** into its parent before
-anything downstream runs. Expansion exists in **two places** that intentionally mirror
-each other:
+A subflow is **inlined** (flattened) for design-time schema propagation and preview, but
+**compiled to a real, nested `beam.PTransform` subclass** — not inlined — for code
+generation and execution. These are deliberately different because they serve different
+consumers:
 
-| Where | Function | Purpose |
-|---|---|---|
-| Editor | `expandNodesAndEdgesForSchema` in `apps/editor/src/lib/schema-store.ts` | Design-time schema propagation. |
-| Server | `expandSubflows` in `apps/server/src/routes/pipelines.ts` | Code generation, execution, and preview. |
+| Path | Function | Purpose | Shape |
+|---|---|---|---|
+| Editor | `expandNodesAndEdgesForSchema` in `apps/editor/src/lib/schema-store.ts` | Design-time schema propagation. | Flattened. |
+| Server (preview) | `flattenSubflowsForPreview` in `apps/server/src/routes/pipelines.ts` | Preview's truncated-DAG target-step resolution. | Flattened. |
+| Server (generate/execute) | `resolveSubflowTree` + `buildIR`'s recursive composite-step compilation (`packages/ir/src/builder.ts`) | Code generation & execution. | Nested — each subflow becomes its own `class` with `expand()`. |
 
-Both do the same core steps, recursively (max depth 10, guarding against cycles):
+**Flattening** (editor schema propagation, server preview) still works exactly as before:
+recursively (max depth 10, guarding against cycles), copy the subflow's internal nodes/
+edges with an id prefix `sub_<proxyNodeId>_`, substitute `ISubflowParameter` values
+directly into internal node settings, rewire the boundary (§5), and keep the proxy as a
+passthrough so it remains addressable. This is legitimate here because schema
+propagation and truncated preview don't care about the shape of generated Python — only
+about "what columns/data flow through."
 
-1. Find a `system:subflow` node and fetch the referenced subflow document
-   (editor: from `subflowCache`; server: from `storage`).
-2. Copy the subflow's internal nodes/edges with an id prefix `sub_<proxyNodeId>_`
-   (nested subflows compound the prefix, outermost-first).
-3. **Substitute parameters**: for each `ISubflowParameter`, if the proxy carries a value
-   under `settings[param.id]`, write it into `internalNode.settings[targetSettingKey]`.
-4. **Rewire the boundary** (§5).
-5. Keep the proxy node as a **passthrough** so it remains addressable (e.g. for preview):
-   - Editor: retype it to `system:subflow-proxy` and register a passthrough schema node.
-   - Server: retype it to `system:subflow-output` (a passthrough sink) — every internal
-     output edge is rewired to feed the proxy's single required `in` port.
+**Compiling to PTransform** (generate/execute) does NOT flatten:
 
-> **Gotcha (server side):** the proxy becomes `system:subflow-output`, whose `in` port is
-> `required`. Internal-output → proxy edges **must** target port id `in` — not the output
-> *name* — or graph validation fails with *"Required input port "Data" is not connected"*.
-> Per-output fan-out to the parent's downstream nodes rides on the restored parent-out
-> edges, which keep their original `sourcePortId` (the output name).
+1. `resolveSubflowTree` (server) recursively pre-fetches every referenced subflow
+   document — direct and transitive — into an in-memory `id -> SerializedWorkflow` map,
+   performing the same validation as flattening used to (no subflow selected / subflow
+   not found / ambiguous or orphaned output boundary), throwing `badRequest` (400) errors
+   with node ids exactly as before. No nodes are copied or rewired at this stage.
+2. `buildIR` (`packages/ir`) is called on the **un-flattened** DAG with a `resolveSubflow`
+   option backed by that map. When it encounters a `system:subflow` node, it recursively
+   calls itself on the referenced subflow's own DAG (`buildCompositeStepForSubflowNode`),
+   producing a **nested `IRStep`** whose `subPipeline` is the subflow's own `IRPipeline` —
+   arbitrary nesting depth falls out of this recursion for free, guarded by the same
+   depth-10 cap.
+3. `generatePythonBeam` (`packages/beam-generator`) emits one `class <Name>(beam.PTransform)`
+   per distinct subflow document (reused across multiple usage sites — one class,
+   N instantiations with each site's own parameter values), whose `expand()` recursively
+   emits the subflow's own internal steps (each itself a `PTransform` — leaf operations
+   like Filter/Map/GroupBy are ALSO one-class-per-operation-type, reused the same way).
+   A subflow's exposed `ISubflowParameter`s become real `__init__` constructor
+   arguments — nested step params reference `self.<argName>` at runtime, not a
+   baked-in literal — so the generated class is a genuinely reusable, parameterizable
+   Beam component.
+
+> **Gotcha carried over from flattening:** the output-boundary classifier
+> (`resolveSubflowOutputs`, §6) is the single shared source of truth for a subflow's
+> output arity in BOTH paths — flattening's proxy rewiring and the PTransform path's
+> `expand()` return shape (a single value, or a `dict` keyed by output name for
+> multi-output subflows) are both derived from it, so they can never disagree.
 
 ---
 
@@ -175,9 +194,12 @@ the new parameter substitution.
 
 ## 7. Preview
 
-Preview (`packages/execution/src/preview/`) runs the same `expandSubflows` on the server,
-then `generatePreviewPipeline` builds a truncated pipeline up to the target node and
-appends a `PreviewFeatherSink`.
+Preview (`packages/execution/src/preview/`) runs `flattenSubflowsForPreview` on the
+server (the flattening path, §4 — unchanged from before the PTransform-compilation
+work), then `generatePreviewPipeline` builds a truncated pipeline up to the target node
+and appends a `PreviewFeatherSink`. Preview intentionally stays on the flattened path:
+its truncated-DAG/target-step resolution assumes a flat id space, and (like schema
+propagation) it doesn't care about the shape of generated Python.
 
 - **Target step resolution.** The preview sink must attach to the target node's IR step.
   It is resolved explicitly (step whose `id === targetNodeId`, else the last
@@ -198,7 +220,8 @@ Parent: `CSV Source → [Subflow] → CSV Output`, where the subflow is
 `Input 1 → Filter → Output 1` and exposes the filter's `value` setting as `param_1`. The
 parent proxy sets `param_1 = "7"`.
 
-After `expandSubflows` and code generation the emitted Beam graph is:
+**Preview** (flattened path, §4/§7) still inlines: the emitted Beam graph is a flat
+sequence —
 
 ```
 step_src                       # CSV Source
@@ -210,6 +233,39 @@ step_sink                      # CSV Output
 Previewing the proxy node `sf` against a CSV with an `a=7` row returns exactly that row —
 confirming inlining, parameter substitution, named-port wiring, and preview-sink
 placement all line up.
+
+**Generate/Execute** (PTransform path, §4) does NOT inline — the subflow compiles to its
+own reusable class, instantiated at the proxy's use site with the parent's override:
+
+```python
+class FilterTransform(beam.PTransform):
+    def __init__(self, field, operator, value):
+        ...
+    def expand(self, pcoll):
+        ...
+
+class My_Subflow(beam.PTransform):
+    def __init__(self, param_1='<subflow's own default>'):
+        super().__init__()
+        self.param_1 = param_1
+
+    def expand(self, pcoll):
+        step_filter = pcoll | 'Filter' >> FilterTransform(field='a', operator='==', value=self.param_1)
+        return step_filter
+
+def run():
+    ...
+    with beam.Pipeline(options=pipeline_options) as p:
+        step_src = p | 'CSV Source' >> ReadFromCSVTransform(...)
+        step_sf = step_src | 'Subflow' >> My_Subflow(param_1='7')
+        step_sink = step_sf | 'CSV Output' >> WriteToCSVTransform(...)
+```
+
+Running this against a CSV with an `a=7` row produces the same result as the preview
+trace — confirming the two paths (flattened preview vs. compiled PTransform) agree on
+behavior while differing in code shape. A subflow containing another subflow compiles
+the same way recursively: the inner subflow's class is emitted before the outer one,
+and the outer's `expand()` instantiates the inner class like any other PTransform.
 
 ---
 
@@ -260,22 +316,22 @@ from project ownership and lifecycle.
   hard-block.)
 - **The output boundary is auto-derived.** A subflow doesn't strictly need an explicit
   `system:subflow-output` node: the shared classifier `resolveSubflowOutputs`
-  (`packages/shared/src/subflow-outputs.ts`, used by both the server `expandSubflows` and
-  the editor's `expandNodesAndEdgesForSchema`) resolves the boundary — if there's no output
-  node but exactly one **terminal** (a node with nothing after it), that terminal's output
-  is used automatically. Grouping a "tail" selection also auto-adds one output up front.
-  Deleting the output node of such a subflow therefore doesn't break it — it re-derives.
-  Genuinely ambiguous cases (0 or >1 terminals with no output node, or an **orphaned**
-  terminal in a multi-output subflow) raise a **clear, node-named error** on generate/run
-  ("add a Subflow Output node…"); design-time schema **degrades gracefully** — valid
-  outputs still propagate their columns downstream, and the offending node just carries a
-  validation issue (nothing blanks).
-- **A workflow referencing a deleted subflow fails gracefully.** `expandSubflows`
-  (generate / execute / preview) throws a `badRequest` (400) with a clear, node-named
-  message — *"Subflow node \"<label>\" (<id>) references a subflow that no longer exists.
-  Pick a different subflow or remove the node."* — plus a structured `issues` entry
-  (`nodeId`) so the editor can pinpoint the node. It is NOT a bare 500. Preview records
-  the same message as a `failed` status so the panel shows it.
+  (`packages/shared/src/subflow-outputs.ts`, used by the server's `flattenSubflowsForPreview`,
+  `resolveSubflowTree`/`buildIR`, and the editor's `expandNodesAndEdgesForSchema`) resolves
+  the boundary — if there's no output node but exactly one **terminal** (a node with nothing
+  after it), that terminal's output is used automatically. Grouping a "tail" selection also
+  auto-adds one output up front. Deleting the output node of such a subflow therefore
+  doesn't break it — it re-derives. Genuinely ambiguous cases (0 or >1 terminals with no
+  output node, or an **orphaned** terminal in a multi-output subflow) raise a **clear,
+  node-named error** on generate/run ("add a Subflow Output node…"); design-time schema
+  **degrades gracefully** — valid outputs still propagate their columns downstream, and the
+  offending node just carries a validation issue (nothing blanks).
+- **A workflow referencing a deleted subflow fails gracefully.** `resolveSubflowTree`
+  (generate / execute) and `flattenSubflowsForPreview` (preview) each throw a `badRequest`
+  (400) with a clear, node-named message — *"Subflow node \"<label>\" (<id>) references a
+  subflow that no longer exists. Pick a different subflow or remove the node."* — plus a
+  structured `issues` entry (`nodeId`) so the editor can pinpoint the node. It is NOT a bare
+  500. Preview records the same message as a `failed` status so the panel shows it.
 
 ---
 
@@ -287,14 +343,18 @@ from project ownership and lifecycle.
 | System node defs | `packages/nodes/src/system/{subflow,subflow-input,subflow-output}.ts` |
 | Boundary schema nodes | `packages/nodes/src/schema/{subflow-input,subflow-passthrough}.schema.ts`, registered in `schema/index.ts` |
 | Grouping + save + re-expand | `apps/editor/src/store/workflow-store.ts` |
-| Editor-side expansion | `apps/editor/src/lib/schema-store.ts` (`expandNodesAndEdgesForSchema`) |
+| Editor-side expansion (flattened, schema propagation only) | `apps/editor/src/lib/schema-store.ts` (`expandNodesAndEdgesForSchema`) |
 | Proxy handle rendering | `apps/editor/src/components/nodes/CustomNodes.tsx` |
 | Palette filter (hide boundary nodes) | `apps/editor/src/components/NodePalette.tsx` |
 | Subflow picker (searchable library) | `apps/editor/src/components/PropertyPanel.tsx` (`SubflowPicker`) |
 | Subflow Library modal (browse/open/delete) + delete guard + project-delete copy | `apps/editor/src/components/Toolbar.tsx` (`SubflowLibraryModal`) |
 | API client | `apps/editor/src/api/client.ts` (`listSubflows`, `getReferences`) |
-| Server expansion + CRUD + preview + references + subflowsOnly | `apps/server/src/routes/pipelines.ts` |
+| Server-side flattening (preview only) + CRUD + references + subflowsOnly | `apps/server/src/routes/pipelines.ts` (`flattenSubflowsForPreview`) |
+| Server-side subflow-document pre-resolution for codegen (no flattening) | `apps/server/src/routes/pipelines.ts` (`resolveSubflowTree`) |
+| Recursive composite-step IR compilation (nested `subPipeline`, arbitrary depth) | `packages/ir/src/builder.ts` (`buildIR`'s `system:subflow` branch, `buildCompositeStepForSubflowNode`) |
+| Nested IR types (`subPipeline`, `compositeParams`, `compositeOutputs`, `compositeInputNames`) | `packages/ir/src/types.ts` |
+| PTransform class emission (leaf operations AND composite/subflow steps, unified) | `packages/beam-generator/src/generator.ts` (`collectClassPlans`, `emitCompositeClass`, `emitStepInstantiation`) |
 | Global list + reference count | `apps/server/src/db/repositories/workflows.repo.ts` (`listSubflows`, `countReferences`) |
 | Project-delete sparing subflows | `apps/server/src/db/repositories/projects.repo.ts` |
 | Metadata types | `packages/shared/src/types.ts` (`ISubflowParameter`, `IWorkflowMetadata`) |
-| Preview pipeline | `packages/execution/src/preview/generator.ts` (`generatePreviewPipeline`) |
+| Preview pipeline (flattened path) | `packages/execution/src/preview/generator.ts` (`generatePreviewPipeline`) |

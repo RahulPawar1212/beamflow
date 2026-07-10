@@ -5,4 +5,5 @@
  */
 
 export { generatePythonBeam, registerOperationHandler } from './generator.js';
+export type { OperationClassHandler, GenerationContext } from './generator.js';
 export { PythonEmitter, toPythonVar, toPythonString } from './python-emitter.js';

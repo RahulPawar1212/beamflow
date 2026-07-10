@@ -149,6 +149,10 @@ export const detectDeadBranches: IRPass = {
 /**
  * Run all optimization passes on an IR pipeline.
  *
+ * Recurses into every composite (subflow) step's `subPipeline`, so nested
+ * subflow bodies benefit from the same fusion/dead-branch passes as the
+ * top-level pipeline — symmetric with `validateIR`'s recursion.
+ *
  * @param pipeline - The unoptimized IR pipeline.
  * @param passes - Optimization passes to apply (default: all built-in passes).
  * @returns The optimized IR pipeline.
@@ -161,5 +165,15 @@ export function optimizeIR(
   for (const pass of passes) {
     result = pass.apply(result);
   }
+
+  if (result.steps.some((s) => s.subPipeline)) {
+    result = {
+      ...result,
+      steps: result.steps.map((s) =>
+        s.subPipeline ? { ...s, subPipeline: optimizeIR(s.subPipeline, passes) } : s,
+      ),
+    };
+  }
+
   return result;
 }

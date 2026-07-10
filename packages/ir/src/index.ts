@@ -14,10 +14,12 @@ export type {
   IRStep,
   IRConnection,
   IRPipelineOptions,
+  IRCompositeParameter,
+  IRCompositeOutput,
 } from './types.js';
 
 export { buildIR, validateIR } from './builder.js';
-export type { IRBuilderOptions } from './builder.js';
+export type { IRBuilderOptions, SubflowResolver, ResolvedSubflowDoc } from './builder.js';
 
 export { optimizeIR, fuseFilters, detectDeadBranches } from './optimizer.js';
 export type { IRPass } from './optimizer.js';

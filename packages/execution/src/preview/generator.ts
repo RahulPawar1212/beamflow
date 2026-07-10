@@ -1,46 +1,66 @@
 import { DAG } from '@beamflow/graph';
 import { buildIR } from '@beamflow/ir';
 import type { NodeRegistry } from '@beamflow/core';
-import { generatePythonBeam, registerOperationHandler } from '@beamflow/beam-generator';
+import { generatePythonBeam, registerOperationHandler, toPythonString } from '@beamflow/beam-generator';
 import type { GeneratedPipeline, IConnection, INodeInstance } from '@beamflow/shared';
 import { IRStepType } from '@beamflow/shared';
 
-// Register the custom Preview Feather Sink operation handler for Python codegen
-registerOperationHandler('PreviewFeatherSink', (step, emitter, ctx) => {
-  const varName = ctx.varNames.get(step.id)!;
-  const inputVar = ctx.varNames.get(step.inputs[0]);
-  const filePath = step.params.filePath as string;
-  const limit = (step.params.limit as number) || 1000;
+// Register the custom Preview Feather Sink operation as a reusable PTransform
+// class, following the same one-class-per-operation-type pattern as every
+// other leaf operation in @beamflow/beam-generator.
+registerOperationHandler('PreviewFeatherSink', {
+  classNameHint: 'PreviewFeatherSinkTransform',
+  emitClass: (className, emitter) => {
+    emitter.addImport('apache_beam as beam');
+    emitter.addImport('pyarrow as pa');
+    emitter.addImport('pyarrow.feather as feather');
+    emitter.addImport('pandas as pd');
 
-  emitter.addImport('apache_beam as beam');
-  emitter.addImport('pyarrow as pa');
-  emitter.addImport('pyarrow.feather as feather');
-  emitter.addImport('pandas as pd');
+    emitter.blank();
+    emitter.line(`class _${className}WriteDoFn(beam.DoFn):`);
+    emitter.indent();
+    emitter.line(`def __init__(self, file_path):`);
+    emitter.indent();
+    emitter.line(`self.file_path = file_path`);
+    emitter.dedent();
+    emitter.blank();
+    emitter.line(`def process(self, element):`);
+    emitter.indent();
+    emitter.line(`if not element:`);
+    emitter.indent();
+    emitter.line(`df = pd.DataFrame()`);
+    emitter.dedent();
+    emitter.line(`else:`);
+    emitter.indent();
+    emitter.line(`df = pd.DataFrame(element)`);
+    emitter.dedent();
+    emitter.line(`feather.write_feather(df, self.file_path, compression='uncompressed')`);
+    emitter.line(`yield element`);
+    emitter.dedent();
+    emitter.dedent();
+    emitter.blank();
 
-  emitter.blank();
-  emitter.comment('Preview: Sample and Write to Feather');
-  
-  // Create a custom DoFn to write a list of dicts (from FixedSizeGlobally) to Feather
-  emitter.line(`class WritePreviewFeather(beam.DoFn):`);
-  emitter.indent();
-  emitter.line(`def process(self, element):`);
-  emitter.indent();
-  emitter.line(`if not element:`);
-  emitter.indent();
-  emitter.line(`df = pd.DataFrame()`);
-  emitter.dedent();
-  emitter.line(`else:`);
-  emitter.indent();
-  emitter.line(`df = pd.DataFrame(element)`);
-  emitter.dedent();
-  emitter.line(`feather.write_feather(df, '${filePath}', compression='uncompressed')`);
-  emitter.line(`yield element`);
-  emitter.dedent();
-  emitter.dedent();
-  emitter.blank();
-
-  emitter.line(`${varName}_sample = ${inputVar} | 'Preview_Sample' >> beam.combiners.Sample.FixedSizeGlobally(${limit})`);
-  emitter.line(`${varName} = ${varName}_sample | 'Preview_Write' >> beam.ParDo(WritePreviewFeather())`);
+    emitter.line(`class ${className}(beam.PTransform):`);
+    emitter.indent();
+    emitter.line(`def __init__(self, file_path, limit=1000):`);
+    emitter.indent();
+    emitter.line(`super().__init__()`);
+    emitter.line(`self.file_path = file_path`);
+    emitter.line(`self.limit = limit`);
+    emitter.dedent();
+    emitter.blank();
+    emitter.line(`def expand(self, pcoll):`);
+    emitter.indent();
+    emitter.line(`sample = pcoll | 'Preview_Sample' >> beam.combiners.Sample.FixedSizeGlobally(self.limit)`);
+    emitter.line(`return sample | 'Preview_Write' >> beam.ParDo(_${className}WriteDoFn(self.file_path))`);
+    emitter.dedent();
+    emitter.dedent();
+  },
+  instantiationKwargs: (step) => {
+    const filePath = (step.params.filePath as string) || '';
+    const limit = (step.params.limit as number) || 1000;
+    return `file_path='${toPythonString(filePath)}', limit=${limit}`;
+  },
 });
 
 /**
@@ -107,7 +127,17 @@ export function generatePreviewPipeline(
   const exactStep = ir.steps.find(s => s.id === targetNodeId);
   // For composite nodes the output is the last `${targetNodeId}__s<n>` step.
   const compositeStep = [...ir.steps].reverse().find(s => s.id.startsWith(`${targetNodeId}__s`));
-  const targetOutputStepId = (exactStep ?? compositeStep ?? ir.steps[ir.steps.length - 1]).id;
+  const resolvedStep = exactStep ?? compositeStep ?? ir.steps[ir.steps.length - 1];
+
+  // A Write/sink step's PTransform (e.g. WriteToCSVTransform) returns a write
+  // result, not a PCollection of records — sampling/feathering THAT (instead
+  // of the real data feeding into it) either produces garbage or crashes
+  // deep in the runner. Previewing a sink means "show me the data it's
+  // about to write," so redirect to its upstream input step instead.
+  const targetOutputStepId =
+    resolvedStep.type === IRStepType.Write && resolvedStep.inputs.length > 0
+      ? resolvedStep.inputs[0]
+      : resolvedStep.id;
   const previewStepId = `${targetNodeId}__preview_sink`;
   
   ir.steps.push({

@@ -94,4 +94,34 @@ describe('Execution Package', () => {
     expect(result.exitCode).toBe(1);
     expect(result.errors).toContain('SyntaxError: invalid syntax');
   });
+
+  it('cleans up the workDir after execution (no leftover temp state across runs)', async () => {
+    // Leftover exec_* / beam-temp-* directories from never cleaning up
+    // workDir caused Beam's FileBasedSink to collide with stale finalize-
+    // write state on Windows ("src and dst files do not exist") when an
+    // output path was reused across runs. workDir must always be swept.
+    const mockChild = {
+      stdout: { on: vi.fn() },
+      stderr: { on: vi.fn() },
+      on: vi.fn((event, callback) => {
+        if (event === 'close') callback(0);
+      }),
+      kill: vi.fn(),
+    };
+    vi.mocked(childProcess.spawn).mockReturnValue(mockChild as any);
+
+    const pipeline = {
+      code: 'print("hello")',
+      filename: 'pipeline.py',
+      language: 'python' as const,
+      requirements: [],
+      irPipeline: {},
+    };
+
+    await executePipeline(pipeline, { installDeps: false });
+    expect(fs.rm).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ recursive: true, force: true }),
+    );
+  });
 });

@@ -12,6 +12,7 @@ import { pipeline } from 'stream';
 import type { NodeRegistry } from '@beamflow/core';
 import { DAG, deserializeWorkflow, serializeWorkflow } from '@beamflow/graph';
 import { buildIR, optimizeIR, validateIR } from '@beamflow/ir';
+import type { SubflowResolver } from '@beamflow/ir';
 import { generatePythonBeam } from '@beamflow/beam-generator';
 import { executePipeline, LocalFeatherStorage, PreviewCacheManager, PreviewManager } from '@beamflow/execution';
 import { generateId, timestamp, SCHEMA_VERSION, resolveSubflowOutputs } from '@beamflow/shared';
@@ -288,7 +289,7 @@ export async function pipelineRoutes(
         // Fire and forget — run in background. If subflow expansion fails (e.g. a
         // referenced subflow was deleted), record it as a failed preview so the
         // panel shows the clear, node-named message instead of hanging.
-        expandSubflows(workflow, userId).then(expandedWorkflow => {
+        flattenSubflowsForPreview(workflow, userId).then(expandedWorkflow => {
           previewManager.triggerPreview(expandedWorkflow, req.params.nodeId, 1000).catch(console.error);
         }).catch((err) => {
           const message = err instanceof Error ? err.message : String(err);
@@ -337,8 +338,14 @@ export async function pipelineRoutes(
 
     /**
      * Recursively expands subflows by inlining their nodes and connections.
+     *
+     * Used ONLY by the preview trigger — preview's truncated-DAG/target-step
+     * resolution assumes a flat id space, same reasoning as the editor's
+     * design-time schema propagation. Code generation and execution use
+     * `resolveSubflowTree` + `buildIR`'s recursive composite-step compilation
+     * instead, so subflows compile to real nested `beam.PTransform` classes.
      */
-    async function expandSubflows(
+    async function flattenSubflowsForPreview(
       workflow: SerializedWorkflow,
       userId: string,
       depth = 0
@@ -386,7 +393,7 @@ export async function pipelineRoutes(
           );
         }
 
-        const fullyExpandedSubflow = await expandSubflows(subflowWf, userId, depth + 1);
+        const fullyExpandedSubflow = await flattenSubflowsForPreview(subflowWf, userId, depth + 1);
 
         const prefix = `sub_${subflowNode.id}_`;
         const mappedNodes = fullyExpandedSubflow.nodes.map(n => {
@@ -500,6 +507,79 @@ export async function pipelineRoutes(
       };
     }
 
+    /**
+     * Recursively pre-fetch every subflow document referenced (directly or
+     * transitively) by a workflow, into a flat id -> document map, WITHOUT
+     * flattening/inlining anything. Used by /generate and /execute so
+     * `buildIR` can recursively compile `system:subflow` nodes into nested
+     * composite IRSteps (real PTransform classes) instead of inlined code.
+     *
+     * All user-facing validation (no subflow selected, subflow not found,
+     * ambiguous/orphaned output boundary) happens HERE, as badRequest (400)
+     * errors with node ids — mirroring flattenSubflowsForPreview's semantics
+     * — so buildIR itself only ever throws "should not happen" errors for a
+     * resolver that already did its job.
+     */
+    async function resolveSubflowTree(
+      workflow: SerializedWorkflow,
+      userId: string,
+      depth = 0,
+      seen: Map<string, SerializedWorkflow> = new Map(),
+    ): Promise<Map<string, SerializedWorkflow>> {
+      if (depth > 10) {
+        throw badRequest('Max subflow nesting depth exceeded (circular dependency?).');
+      }
+
+      for (const node of workflow.nodes) {
+        if (node.type !== 'system:subflow') continue;
+
+        const nodeRef = (node as any).label ? `"${(node as any).label}" (${node.id})` : node.id;
+        const subflowId = node.settings?.subflowId as string | undefined;
+        if (!subflowId) {
+          throw badRequest(
+            `Subflow node ${nodeRef} has no subflow selected. Open the node and pick a subflow.`,
+            [{ severity: 'error', nodeId: node.id, message: 'No subflow selected for this Subflow node.' }],
+          );
+        }
+
+        if (seen.has(subflowId)) continue; // already resolved (dedup repeated references)
+
+        const subflowWf = await storage.get(subflowId, userId);
+        if (!subflowWf) {
+          throw badRequest(
+            `Subflow node ${nodeRef} references a subflow that no longer exists. ` +
+              `Pick a different subflow or remove the node.`,
+            [{ severity: 'error', nodeId: node.id, message: `Referenced subflow ${subflowId} not found (deleted?).` }],
+          );
+        }
+
+        seen.set(subflowId, subflowWf);
+
+        // Pre-validate the output boundary now (same classifier buildIR will
+        // use), so ambiguity surfaces as a clean 400 before IR building.
+        const activeNodes = subflowWf.nodes.filter(
+          (n) => n.type !== 'system:subflow-input' && n.type !== 'system:subflow-output',
+        );
+        const outputNodes = subflowWf.nodes.filter((n) => n.type === 'system:subflow-output');
+        const edgesLite = subflowWf.connections.map((c) => ({ from: c.sourceNodeId, to: c.targetNodeId }));
+        const outputResolution = resolveSubflowOutputs(
+          activeNodes.map((n) => ({ id: n.id, label: (n as any).label })),
+          outputNodes.map((n) => ({ id: n.id })),
+          edgesLite,
+        );
+        if (outputResolution.error) {
+          throw badRequest(outputResolution.error.message, [
+            { severity: 'error', nodeId: outputResolution.error.nodeId, message: outputResolution.error.message },
+          ]);
+        }
+
+        // Recurse into the subflow's own nodes (nested subflows).
+        await resolveSubflowTree(subflowWf, userId, depth + 1, seen);
+      }
+
+      return seen;
+    }
+
     /** POST /api/pipelines/:id/generate — Generate Beam code from pipeline. */
     appWithAuth.post<{ Params: { id: string } }>(
       '/api/pipelines/:id/generate',
@@ -511,11 +591,17 @@ export async function pipelineRoutes(
         }
 
         try {
-          // 0. Expand Subflows
-          const expandedWorkflow = await expandSubflows(workflow, userId);
+          // 0. Recursively pre-resolve every referenced subflow document
+          //    (no flattening) so buildIR can compile each system:subflow
+          //    node into a nested composite IRStep — a real PTransform class.
+          const subflowDocs = await resolveSubflowTree(workflow, userId);
+          const resolveSubflow: SubflowResolver = (id) => {
+            const doc = subflowDocs.get(id);
+            return doc ? { workflow: doc } : undefined;
+          };
 
-          // 1. Deserialize to DAG
-          const { dag, metadata } = deserializeWorkflow(expandedWorkflow);
+          // 1. Deserialize to DAG (un-flattened — still has system:subflow nodes)
+          const { dag, metadata } = deserializeWorkflow(workflow);
 
           // 2. Validate graph
           const graphIssues = dag.validate(registry);
@@ -527,6 +613,7 @@ export async function pipelineRoutes(
           // 3. Build IR
           const ir = buildIR(dag, registry, {
             name: metadata.name,
+            resolveSubflow,
           });
 
           // 4. Validate IR
@@ -569,10 +656,15 @@ export async function pipelineRoutes(
         }
 
         try {
-          // Generate code first
-          const expandedWorkflow = await expandSubflows(workflow, userId);
-          const { dag, metadata } = deserializeWorkflow(expandedWorkflow);
-          const ir = buildIR(dag, registry, { name: metadata.name });
+          // Generate code first — same recursive subflow resolution as /generate,
+          // so subflows compile to real nested PTransform classes.
+          const subflowDocs = await resolveSubflowTree(workflow, userId);
+          const resolveSubflow: SubflowResolver = (id) => {
+            const doc = subflowDocs.get(id);
+            return doc ? { workflow: doc } : undefined;
+          };
+          const { dag, metadata } = deserializeWorkflow(workflow);
+          const ir = buildIR(dag, registry, { name: metadata.name, resolveSubflow });
           const optimizedIR = optimizeIR(ir);
           const generated = generatePythonBeam(optimizedIR);
 

@@ -42,8 +42,12 @@ export const subflowNode = defineNode({
   },
 
   toIR(settings, nodeId) {
-    // The actual compiler needs to intercept this and inline the subflow's IR.
-    // For now, we return a placeholder step that the compiler will expand.
+    // Unreachable via buildIR(): it intercepts `system:subflow` nodes before
+    // ever calling toIR(), recursively compiling the referenced subflow into
+    // a nested composite IRStep (packages/ir/src/builder.ts,
+    // buildCompositeStepForSubflowNode). This stub only exists as a
+    // defensive fallback for any future/alternate caller that invokes
+    // toIR() directly without going through buildIR's node-type dispatch.
     return {
       operation: 'Subflow',
       stepType: IRStepType.Transform,

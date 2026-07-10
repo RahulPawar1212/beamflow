@@ -211,6 +211,113 @@ describe('pipeline routes', () => {
       });
       expect(res.statusCode).toBe(404);
     });
+
+    it('compiles a subflow-containing pipeline to a nested PTransform class instead of inlining it', async () => {
+      const now = '2024-01-01T00:00:00.000Z';
+
+      // 1. Create the subflow document (isSubflow: true), a simple
+      //    Input -> Filter -> Output chain exposing the filter's value.
+      const subflowCreate = await app.inject({
+        method: 'POST',
+        url: '/api/pipelines',
+        headers: { Authorization: `Bearer ${token}` },
+        payload: {
+          name: 'Age Filter Subflow',
+          isSubflow: true,
+          parameters: [
+            { id: 'param_1', name: 'Min Age', type: 'string', targetNodeId: 'inner_filter', targetSettingKey: 'value' },
+          ],
+          nodes: [
+            { id: 'inner_input', type: 'system:subflow-input', settings: { inputName: 'Input 1' }, position: { x: 0, y: 0 } },
+            { id: 'inner_filter', type: 'beamflow:filter', settings: { field: 'age', operator: '>', value: '18' }, position: { x: 100, y: 0 } },
+            { id: 'inner_output', type: 'system:subflow-output', settings: { outputName: 'Output 1' }, position: { x: 200, y: 0 } },
+          ],
+          connections: [
+            { id: 'ie1', sourceNodeId: 'inner_input', sourcePortId: 'out', targetNodeId: 'inner_filter', targetPortId: 'in' },
+            { id: 'ie2', sourceNodeId: 'inner_filter', sourcePortId: 'out', targetNodeId: 'inner_output', targetPortId: 'in' },
+          ],
+        },
+      });
+      expect(subflowCreate.statusCode).toBe(201);
+      const subflowId = subflowCreate.json().metadata.id;
+
+      // 2. Create the parent pipeline referencing the subflow via a
+      //    system:subflow proxy, overriding the exposed parameter.
+      const created = await app.inject({
+        method: 'POST',
+        url: '/api/pipelines',
+        headers: { Authorization: `Bearer ${token}` },
+        payload: {},
+      });
+      const id = created.json().metadata.id;
+      const parentWorkflow: SerializedWorkflow = {
+        schemaVersion: '1.0.0',
+        metadata: { id, name: 'Parent', description: '', createdAt: now, updatedAt: now },
+        nodes: [
+          { id: 'src', type: 'beamflow:csv-source', settings: { filePath: '/in.csv' }, position: { x: 0, y: 0 } },
+          { id: 'proxy', type: 'system:subflow', settings: { subflowId, param_1: '21' }, position: { x: 100, y: 0 } },
+          { id: 'out', type: 'beamflow:csv-output', settings: { filePath: '/out.csv' }, position: { x: 200, y: 0 } },
+        ],
+        connections: [
+          { id: 'e1', sourceNodeId: 'src', sourcePortId: 'out', targetNodeId: 'proxy', targetPortId: 'in' },
+          { id: 'e2', sourceNodeId: 'proxy', sourcePortId: 'out', targetNodeId: 'out', targetPortId: 'in' },
+        ],
+      };
+
+      await app.inject({
+        method: 'PUT',
+        url: `/api/pipelines/${id}`,
+        headers: { Authorization: `Bearer ${token}` },
+        payload: parentWorkflow,
+      });
+
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/pipelines/${id}/generate`,
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+
+      // The subflow compiles to its OWN PTransform class (not inlined flat
+      // statements), instantiated once at the proxy's use site.
+      expect(body.code).toMatch(/class \w*Age_Filter_Subflow\w*\(beam\.PTransform\):/);
+      expect(body.code).toContain('def expand(self, pcoll):');
+      expect(body.code).toMatch(/>>\s*\w*Age_Filter_Subflow\w*\(/);
+    });
+
+    it('returns 400 with a node-named error when the referenced subflow does not exist', async () => {
+      const now = '2024-01-01T00:00:00.000Z';
+      const created = await app.inject({
+        method: 'POST',
+        url: '/api/pipelines',
+        headers: { Authorization: `Bearer ${token}` },
+        payload: {},
+      });
+      const id = created.json().metadata.id;
+      const workflow: SerializedWorkflow = {
+        schemaVersion: '1.0.0',
+        metadata: { id, name: 'Parent', description: '', createdAt: now, updatedAt: now },
+        nodes: [
+          { id: 'proxy', type: 'system:subflow', settings: { subflowId: 'sf_does_not_exist' }, position: { x: 0, y: 0 } },
+        ],
+        connections: [],
+      };
+      await app.inject({
+        method: 'PUT',
+        url: `/api/pipelines/${id}`,
+        headers: { Authorization: `Bearer ${token}` },
+        payload: workflow,
+      });
+
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/pipelines/${id}/generate`,
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().message || JSON.stringify(res.json())).toContain('no longer exists');
+    });
   });
 
   describe('POST /api/pipelines/:id/execute', () => {

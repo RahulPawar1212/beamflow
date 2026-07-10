@@ -15,7 +15,7 @@
  */
 
 import { spawn } from 'node:child_process';
-import { mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdir, writeFile, rm, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { nanoid } from 'nanoid';
@@ -230,8 +230,27 @@ export async function executePipeline(
     }
   } finally {
     handle.completedAt = new Date().toISOString();
-    // In production we would clean up the workDir here
-    // await rm(workDir, { recursive: true, force: true }).catch(() => {});
+    // Clean up the workDir so temp state never accumulates across runs.
+    await rm(workDir, { recursive: true, force: true }).catch(() => {});
+    // Beam's FileBasedSink (WriteToText/WriteToCSV) creates its own
+    // `beam-temp-<dest-basename>-<uuid>` finalize-write directory as a
+    // SIBLING of the destination file's parent dir — not nested inside
+    // workDir — prefixed with this executionId when the output path is
+    // under workDir. Leftover beam-temp-* dirs from earlier runs collide
+    // with a later run's finalize-write ("src and dst files do not exist"
+    // on Windows), so sweep any matching this run's id alongside workDir.
+    const beamTempParent = join(workDir, '..');
+    try {
+      const siblings = await readdir(beamTempParent);
+      const staleTempDirs = siblings.filter((name) => name.startsWith(`beam-temp-${executionId}`));
+      await Promise.all(
+        staleTempDirs.map((name) =>
+          rm(join(beamTempParent, name), { recursive: true, force: true }).catch(() => {}),
+        ),
+      );
+    } catch {
+      // beamTempParent may not exist/be readable — nothing to clean up.
+    }
   }
 
   return handle.toResult();

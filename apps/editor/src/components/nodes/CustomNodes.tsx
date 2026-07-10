@@ -7,10 +7,16 @@ import React, { memo } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import {
   FileText, FileJson, Filter, ArrowRightLeft, Group, FileOutput,
-  Database, Box, Sparkles,
+  Database, Box, Sparkles, AlertTriangle, AlertCircle,
 } from 'lucide-react';
 import type { NodeData } from '../../store/workflow-store';
 import { useWorkflowStore } from '../../store/workflow-store';
+import { useNodeIssues } from '../../lib/schema-store';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '../ui/tooltip';
 
 // ─── Icon resolver ──────────────────────────────────────────────────
 
@@ -98,6 +104,41 @@ function getColors(category: string) {
   return categoryColors[category] || categoryColors.transform;
 }
 
+// ─── Node issue badge ───────────────────────────────────────────────
+// Generic — driven by whatever design-time issues the schema store has
+// recorded for this node (schema-store.ts's useNodeIssues). Not specific to
+// any node type; a subflow proxy is simply the first real user of it today
+// (e.g. a dangling external input, or a mirrored output-boundary error).
+
+function NodeIssueBadge({ nodeId }: { nodeId: string }) {
+  const issues = useNodeIssues(nodeId);
+  if (issues.length === 0) return null;
+
+  const hasError = issues.some((i) => i.severity === 'error');
+  const Icon = hasError ? AlertCircle : AlertTriangle;
+  const colorClass = hasError ? 'text-red-400' : 'text-amber-400';
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <div
+          className={`absolute top-2 right-2 z-10 ${colorClass}`}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <Icon size={16} />
+        </div>
+      </TooltipTrigger>
+      <TooltipContent side="top">
+        <div className="flex flex-col gap-1 max-w-xs">
+          {issues.map((issue, i) => (
+            <span key={i}>{issue.message}</span>
+          ))}
+        </div>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 // ─── Base Node Component ────────────────────────────────────────────
 
 function BaseNode({ id, data, selected }: NodeProps) {
@@ -147,6 +188,7 @@ function BaseNode({ id, data, selected }: NodeProps) {
         onClick={() => setSelected(id)}
       >
         <div className={`h-1.5 w-full bg-gradient-to-r ${colors.bar}`} />
+        <NodeIssueBadge nodeId={id} />
 
         {/* Named input handles */}
         {inputPortNames.map((name, i) => (
@@ -203,6 +245,7 @@ function BaseNode({ id, data, selected }: NodeProps) {
     >
       {/* Category accent bar */}
       <div className={`h-1.5 w-full bg-gradient-to-r ${colors.bar}`} />
+      <NodeIssueBadge nodeId={id} />
 
       {/* Input handle */}
       {hasInputs && (

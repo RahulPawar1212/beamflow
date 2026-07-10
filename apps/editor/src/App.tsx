@@ -15,6 +15,7 @@ import { SettingsModal } from './components/SettingsModal.js';
 import { api } from './api/client.js';
 import { useSchemaStore } from './lib/schema-store.js';
 import { installSchemaSync } from './lib/schema-sync.js';
+import { TooltipProvider } from './components/ui/tooltip.js';
 
 // Install the central schema-propagation subscriber once, from this leaf module
 // (both stores are fully initialized here). Schema recomputes whenever
@@ -88,6 +89,7 @@ export default function App() {
   }
 
   return (
+    <TooltipProvider>
     <ReactFlowProvider>
       <div className="w-full h-full flex flex-col">
         {/* Top toolbar */}
@@ -131,5 +133,6 @@ export default function App() {
         />
       </div>
     </ReactFlowProvider>
+    </TooltipProvider>
   );
 }

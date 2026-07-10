@@ -51,10 +51,11 @@ export {
 } from './utils.js';
 
 // Subflow output-boundary classifier (shared by server + editor expanders).
-export { resolveSubflowOutputs } from './subflow-outputs.js';
+export { resolveSubflowOutputs, resolveSubflowInputBoundary } from './subflow-outputs.js';
 export type {
   SubflowNodeLite,
   SubflowEdgeLite,
   SubflowOutputRouting,
   SubflowOutputResolution,
+  SubflowInputBoundaryResolution,
 } from './subflow-outputs.js';

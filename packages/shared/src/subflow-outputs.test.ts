@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveSubflowOutputs } from './subflow-outputs.js';
+import { resolveSubflowOutputs, resolveSubflowInputBoundary } from './subflow-outputs.js';
 
 const n = (id: string, label?: string) => ({ id, label });
 const e = (from: string, to: string) => ({ from, to });
@@ -69,5 +69,21 @@ describe('resolveSubflowOutputs', () => {
     // ... but the orphaned terminal is flagged by name.
     expect(r.error?.nodeId).toBe('C');
     expect(r.error!.message).toContain('Branch C');
+  });
+});
+
+describe('resolveSubflowInputBoundary', () => {
+  it('no external edge → never dangling, regardless of input node count', () => {
+    expect(resolveSubflowInputBoundary(false, 0)).toEqual({ danglingExternalInput: false });
+    expect(resolveSubflowInputBoundary(false, 2)).toEqual({ danglingExternalInput: false });
+  });
+
+  it('external edge + no Subflow Input node → dangling (subflow\'s own data wins silently otherwise)', () => {
+    expect(resolveSubflowInputBoundary(true, 0)).toEqual({ danglingExternalInput: true });
+  });
+
+  it('external edge + at least one Subflow Input node → not dangling, data has somewhere to go', () => {
+    expect(resolveSubflowInputBoundary(true, 1)).toEqual({ danglingExternalInput: false });
+    expect(resolveSubflowInputBoundary(true, 2)).toEqual({ danglingExternalInput: false });
   });
 });

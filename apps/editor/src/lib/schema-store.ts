@@ -34,7 +34,7 @@ import type {
   SchemaChangeEvent,
 } from '@beamflow/schema';
 import { registerBuiltinSchemaNodes } from '@beamflow/nodes';
-import { resolveSubflowOutputs } from '@beamflow/shared';
+import { resolveSubflowOutputs, resolveSubflowInputBoundary } from '@beamflow/shared';
 import { useWorkflowStore } from '../store/workflow-store';
 import { trace } from './trace';
 
@@ -110,13 +110,21 @@ function expandNodesAndEdgesForSchema(
   nodes: WorkflowNode[],
   edges: WorkflowEdge[],
   subflowCache: Record<string, any>
-): { expandedNodes: WorkflowNode[], expandedEdges: WorkflowEdge[], subflowIssues: Map<string, SchemaValidationIssue> } {
+): { expandedNodes: WorkflowNode[], expandedEdges: WorkflowEdge[], subflowIssues: Map<string, SchemaValidationIssue[]> } {
   const expandedNodes = [...nodes];
   const expandedEdges = [...edges];
-  // Design-time issues surfaced by the output-boundary classifier (e.g. an
-  // orphaned terminal). Keyed by the offending node id; merged into the schemas
-  // map after recompute so the node shows a warning WITHOUT blanking downstream.
-  const subflowIssues = new Map<string, SchemaValidationIssue>();
+  // Design-time issues surfaced by the subflow classifiers (output-boundary
+  // ambiguity, dangling external input). Keyed by the node the issue should be
+  // shown on (the proxy, for both cases below); merged into the schemas map
+  // after recompute so the node shows a warning WITHOUT blanking downstream.
+  // A node can carry more than one issue (e.g. both an output-boundary error
+  // AND a dangling-input warning), so each key holds a list, not one issue.
+  const subflowIssues = new Map<string, SchemaValidationIssue[]>();
+  const addSubflowIssue = (nodeId: string, issue: SchemaValidationIssue) => {
+    const existing = subflowIssues.get(nodeId);
+    if (existing) existing.push(issue);
+    else subflowIssues.set(nodeId, [issue]);
+  };
 
   let hasSubflows = true;
   let depth = 0;
@@ -186,6 +194,24 @@ function expandNodesAndEdgesForSchema(
       if (name) inputByName.set(name, n.id);
     });
 
+    // Detect a dangling external input BEFORE rewiring mutates the edges below:
+    // an external node feeds the proxy's `in` port, but this subflow has no
+    // Subflow Input node to receive it — that data is silently ignored (the
+    // subflow's own internal source, if any, wins instead). Not an error —
+    // just something the user needs to see on the proxy node.
+    const externalInEdges = expandedEdges.filter((e) => e.target === subflowNode.id);
+    const inputBoundary = resolveSubflowInputBoundary(externalInEdges.length > 0, inputNodes.length);
+    if (inputBoundary.danglingExternalInput) {
+      // Note: WorkflowNode intentionally carries no display label here (schema-sync's
+      // fingerprint excludes labels — see schema-sync.ts), so the message references
+      // the source node by id rather than its on-canvas name.
+      addSubflowIssue(subflowNode.id, {
+        severity: 'warning' as any,
+        nodeId: subflowNode.id,
+        message: `This subflow receives data from node "${externalInEdges[0].source}" but has no Subflow Input node inside to use it — that data will be ignored. Add a Subflow Input node inside, or remove this connection.`,
+      } as SchemaValidationIssue);
+    }
+
     // Rewire incoming edges Parent -> subflowNode  TO  Parent -> matching subflow-input.
     if (inputNodes.length > 0) {
       for (const e of expandedEdges) {
@@ -219,9 +245,19 @@ function expandNodesAndEdgesForSchema(
       });
     }
     if (resolution.error) {
-      subflowIssues.set(resolution.error.nodeId, {
+      // Keep the original issue on the offending INTERNAL node (used elsewhere,
+      // e.g. if that node ever becomes independently addressable), and ALSO
+      // mirror it onto the parent-visible proxy — the internal node has no
+      // on-canvas representation in the parent view, so without this mirror
+      // the error was previously computed but never actually visible anywhere.
+      addSubflowIssue(resolution.error.nodeId, {
         severity: 'error' as any,
         nodeId: resolution.error.nodeId,
+        message: resolution.error.message,
+      } as SchemaValidationIssue);
+      addSubflowIssue(subflowNode.id, {
+        severity: 'error' as any,
+        nodeId: subflowNode.id,
         message: resolution.error.message,
       } as SchemaValidationIssue);
     }
@@ -328,16 +364,18 @@ export const useSchemaStore = create<SchemaStoreState>((set, get) => {
       // Full recomputation
       engine.recomputeAll();
 
-      // Merge any output-boundary issues from expansion onto the offending nodes
-      // (recomputeAll emitted schemas first; we augment their issues without
-      // touching computed columns — schema still propagated for valid outputs).
+      // Merge any subflow-classifier issues from expansion onto the offending/
+      // proxy nodes (recomputeAll emitted schemas first; we augment their
+      // issues without touching computed columns — schema still propagated
+      // for valid outputs, and this runs fresh every sync so a resolved
+      // subflow simply produces no entry here, clearing any prior issue).
       if (subflowIssues.size > 0) {
         const merged = new Map(get().schemas);
-        for (const [nodeId, issue] of subflowIssues) {
+        for (const [nodeId, issues] of subflowIssues) {
           const entry = merged.get(nodeId);
           merged.set(nodeId, {
             outputSchema: entry?.outputSchema ?? emptySchema(),
-            issues: [...(entry?.issues ?? []), issue],
+            issues: [...(entry?.issues ?? []), ...issues],
           });
         }
         set({ schemas: merged });

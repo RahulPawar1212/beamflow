@@ -125,3 +125,35 @@ export function resolveSubflowOutputs(
 function nodeRef(n: SubflowNodeLite): string {
   return n.label ? `"${n.label}" (${n.id})` : n.id;
 }
+
+/**
+ * Resolve whether a subflow's incoming external data is actually usable.
+ *
+ * A `system:subflow` proxy's `in` port is optional: a subflow may be fed from
+ * upstream, or may be self-contained (its own source node inside) — both are
+ * valid. But if a parent wires an external node into the proxy while the
+ * subflow has no `system:subflow-input` node to receive it, that data is
+ * silently ignored (Beam does not detect or warn about a PTransform that
+ * never touches its incoming pcoll). The subflow's own internal data wins in
+ * that case — this is intentional, not an error — but the user must be told.
+ *
+ * PURE function (no I/O), so it can run identically wherever the two inputs
+ * are known (currently the editor's design-time schema expansion).
+ */
+export interface SubflowInputBoundaryResolution {
+  /** True when external data is wired in but has nowhere to go inside. */
+  readonly danglingExternalInput: boolean;
+}
+
+/**
+ * @param hasExternalEdge  whether the parent's system:subflow proxy has at
+ *   least one incoming edge (i.e. external data is being wired in)
+ * @param inputNodeCount   number of system:subflow-input nodes inside the
+ *   referenced subflow
+ */
+export function resolveSubflowInputBoundary(
+  hasExternalEdge: boolean,
+  inputNodeCount: number,
+): SubflowInputBoundaryResolution {
+  return { danglingExternalInput: hasExternalEdge && inputNodeCount === 0 };
+}

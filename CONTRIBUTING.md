@@ -85,17 +85,15 @@ If you want to add new transformations or connectors, please refer to the detail
 
 ## 🧪 Testing and Quality Control
 
-Before submitting any code, please ensure it satisfies the following quality checks:
+Before submitting any code, please ensure it satisfies the following quality checks.
+These same checks run in **CI** (`.github/workflows/ci.yml`) on every push and PR:
+`pnpm build` (also the typecheck) and `pnpm test` (all suites, including the editor
+App mount smoke test).
 
 ### Linting and Formatting
-We use ESLint and Prettier to keep our codebase clean and uniform.
-```bash
-# Run lint checks across all workspace projects
-pnpm lint
-
-# Format code automatically
-pnpm format
-```
+> **Not yet set up.** There is currently no ESLint/Prettier config and `pnpm lint`
+> is a no-op. Adding ESLint + Prettier (and a real `lint` step in CI) is a planned
+> follow-up. Until then, match the style of surrounding code.
 
 ### Running Tests
 Make sure all existing and new test suites pass.

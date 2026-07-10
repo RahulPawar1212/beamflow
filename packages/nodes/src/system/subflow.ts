@@ -20,7 +20,10 @@ export const subflowNode = defineNode({
   tags: ['subflow', 'nested', 'reusable', 'group'],
 
   ports: [
-    inputPort('in', 'Input', { multiple: true }),
+    // Not required: a subflow may be self-contained (its own source inside,
+    // e.g. a CSV Source used directly rather than a system:subflow-input
+    // boundary), so it can legitimately have no upstream edge feeding it.
+    inputPort('in', 'Input', { multiple: true, required: false }),
     outputPort('out', 'Output', { multiple: true }),
   ],
 

@@ -286,6 +286,68 @@ describe('pipeline routes', () => {
       expect(body.code).toMatch(/>>\s*\w*Age_Filter_Subflow\w*\(/);
     });
 
+    it('generates code for a self-contained subflow (own CSV Source inside, no upstream edge into the proxy)', async () => {
+      // Regression: system:subflow's "in" port defaulted to required=true,
+      // which was harmless while subflows were always flattened before
+      // dag.validate() ran. Once /generate stopped flattening (validating
+      // the real un-expanded DAG), a subflow with no upstream feed — reading
+      // its own data internally instead of via a system:subflow-input
+      // boundary — failed graph validation with a false-positive
+      // "Required input port \"Input\" is not connected."
+      const now = '2024-01-01T00:00:00.000Z';
+      const subflowCreate = await app.inject({
+        method: 'POST',
+        url: '/api/pipelines',
+        headers: { Authorization: `Bearer ${token}` },
+        payload: {
+          name: 'Self Contained Subflow',
+          isSubflow: true,
+          nodes: [
+            { id: 'inner_src', type: 'beamflow:csv-source', settings: { filePath: '/inner.csv' }, position: { x: 0, y: 0 } },
+            { id: 'inner_filter', type: 'beamflow:filter', settings: { field: 'age', operator: '>', value: '18' }, position: { x: 100, y: 0 } },
+          ],
+          connections: [
+            { id: 'ie1', sourceNodeId: 'inner_src', sourcePortId: 'out', targetNodeId: 'inner_filter', targetPortId: 'in' },
+          ],
+        },
+      });
+      expect(subflowCreate.statusCode).toBe(201);
+      const subflowId = subflowCreate.json().metadata.id;
+
+      const created = await app.inject({
+        method: 'POST',
+        url: '/api/pipelines',
+        headers: { Authorization: `Bearer ${token}` },
+        payload: {},
+      });
+      const id = created.json().metadata.id;
+      const parentWorkflow: SerializedWorkflow = {
+        schemaVersion: '1.0.0',
+        metadata: { id, name: 'Parent', description: '', createdAt: now, updatedAt: now },
+        nodes: [
+          // No upstream node feeds the proxy — it reads its own CSV Source internally.
+          { id: 'proxy', type: 'system:subflow', settings: { subflowId }, position: { x: 0, y: 0 } },
+          { id: 'out', type: 'beamflow:csv-output', settings: { filePath: '/out.csv' }, position: { x: 100, y: 0 } },
+        ],
+        connections: [
+          { id: 'e1', sourceNodeId: 'proxy', sourcePortId: 'out', targetNodeId: 'out', targetPortId: 'in' },
+        ],
+      };
+      await app.inject({
+        method: 'PUT',
+        url: `/api/pipelines/${id}`,
+        headers: { Authorization: `Bearer ${token}` },
+        payload: parentWorkflow,
+      });
+
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/pipelines/${id}/generate`,
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      expect(res.statusCode).toBe(200);
+    });
+
     it('returns 400 with a node-named error when the referenced subflow does not exist', async () => {
       const now = '2024-01-01T00:00:00.000Z';
       const created = await app.inject({

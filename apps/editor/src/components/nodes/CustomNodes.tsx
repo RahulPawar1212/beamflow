@@ -3,8 +3,8 @@
  * Color-coded by category with handles, icons, and status indicators.
  */
 
-import React, { memo } from 'react';
-import { Handle, Position, type NodeProps } from '@xyflow/react';
+import React, { memo, useEffect } from 'react';
+import { Handle, Position, useUpdateNodeInternals, type NodeProps } from '@xyflow/react';
 import {
   FileText, FileJson, Filter, ArrowRightLeft, Group, FileOutput,
   Database, Box, Sparkles, AlertTriangle, AlertCircle,
@@ -167,7 +167,29 @@ function BaseNode({ id, data, selected }: NodeProps) {
         .filter((n) => n.type === 'system:subflow-output')
         .map((n) => (n.settings?.outputName as string) || 'Output')
     : [];
-  const useNamedPorts = isSubflow && subflowDef && (inputPortNames.length > 1 || outputPortNames.length > 1);
+  // ANY resolved subflow definition uses named-port handles (id = the boundary
+  // node's inputName/outputName), not just when there are 2+ named ports —
+  // otherwise a subflow with exactly ONE named output (the common case) falls
+  // through to the generic branch below, whose output Handle hardcodes
+  // id="out". A parent edge wired with sourcePortId="Output 1" (or any other
+  // real name) then can't find a matching handle id, so React Flow silently
+  // fails to render the edge at all — the connection exists in the data
+  // (workflow-store/backend agree it's wired) but is invisible on canvas.
+  const useNamedPorts = isSubflow && !!subflowDef;
+
+  // The subflow proxy's handle set changes shape post-mount: it first renders
+  // before `subflowCache[subflowId]` has loaded (no def yet), then re-renders
+  // with named handles once the async fetch resolves. React Flow caches each
+  // handle's measured position at mount and does NOT automatically re-measure
+  // just because React re-rendered the DOM with different handles — edges
+  // referencing a handle id that didn't exist at last measurement silently
+  // fail to draw. `updateNodeInternals` is the explicit signal React Flow
+  // needs to re-measure this node's handles.
+  const updateNodeInternals = useUpdateNodeInternals();
+  const handleKey = inputPortNames.join(',') + '|' + outputPortNames.join(',');
+  useEffect(() => {
+    updateNodeInternals(id);
+  }, [id, useNamedPorts, handleKey, updateNodeInternals]);
 
   const handleClass =
     '!w-3.5 !h-3.5 !border-2 !bg-slate-300 !border-slate-500 transition-transform hover:!scale-125';
@@ -190,14 +212,17 @@ function BaseNode({ id, data, selected }: NodeProps) {
         <div className={`h-1.5 w-full bg-gradient-to-r ${colors.bar}`} />
         <NodeIssueBadge nodeId={id} />
 
-        {/* Named input handles */}
-        {inputPortNames.map((name, i) => (
+        {/* Named input handles — falls back to a single generic "in" handle
+            when the subflow has no system:subflow-input node (self-contained
+            subflow), matching the plain branch's convention + the index-0
+            fallback wiring described in docs/subflows.md §5. */}
+        {(inputPortNames.length > 0 ? inputPortNames : ['in']).map((name, i, arr) => (
           <Handle
             key={`in-${name}`}
             type="target"
             position={Position.Left}
             id={name}
-            style={{ top: `${((i + 1) / (inputPortNames.length + 1)) * 100}%` }}
+            style={{ top: `${((i + 1) / (arr.length + 1)) * 100}%` }}
             className={handleClass}
           />
         ))}
@@ -214,14 +239,17 @@ function BaseNode({ id, data, selected }: NodeProps) {
           </div>
         </div>
 
-        {/* Named output handles */}
-        {outputPortNames.map((name, i) => (
+        {/* Named output handles — falls back to a single generic "out" handle
+            when the output boundary is auto-derived (no explicit
+            system:subflow-output node; see resolveSubflowOutputs), same
+            fallback reasoning as the input handles above. */}
+        {(outputPortNames.length > 0 ? outputPortNames : ['out']).map((name, i, arr) => (
           <Handle
             key={`out-${name}`}
             type="source"
             position={Position.Right}
             id={name}
-            style={{ top: `${((i + 1) / (outputPortNames.length + 1)) * 100}%` }}
+            style={{ top: `${((i + 1) / (arr.length + 1)) * 100}%` }}
             className={handleClass}
           />
         ))}

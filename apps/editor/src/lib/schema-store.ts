@@ -34,6 +34,7 @@ import type {
   SchemaChangeEvent,
 } from '@beamflow/schema';
 import { registerBuiltinSchemaNodes } from '@beamflow/nodes';
+import { resolveSubflowOutputs } from '@beamflow/shared';
 import { useWorkflowStore } from '../store/workflow-store';
 import { trace } from './trace';
 
@@ -109,9 +110,13 @@ function expandNodesAndEdgesForSchema(
   nodes: WorkflowNode[],
   edges: WorkflowEdge[],
   subflowCache: Record<string, any>
-): { expandedNodes: WorkflowNode[], expandedEdges: WorkflowEdge[] } {
+): { expandedNodes: WorkflowNode[], expandedEdges: WorkflowEdge[], subflowIssues: Map<string, SchemaValidationIssue> } {
   const expandedNodes = [...nodes];
   const expandedEdges = [...edges];
+  // Design-time issues surfaced by the output-boundary classifier (e.g. an
+  // orphaned terminal). Keyed by the offending node id; merged into the schemas
+  // map after recompute so the node shows a warning WITHOUT blanking downstream.
+  const subflowIssues = new Map<string, SchemaValidationIssue>();
 
   let hasSubflows = true;
   let depth = 0;
@@ -180,11 +185,6 @@ function expandNodesAndEdgesForSchema(
       const name = (n.settings?.inputName as string) ?? '';
       if (name) inputByName.set(name, n.id);
     });
-    const outputByName = new Map<string, string>();
-    outputNodes.forEach((n: any) => {
-      const name = (n.settings?.outputName as string) ?? '';
-      if (name) outputByName.set(name, n.id);
-    });
 
     // Rewire incoming edges Parent -> subflowNode  TO  Parent -> matching subflow-input.
     if (inputNodes.length > 0) {
@@ -196,25 +196,38 @@ function expandNodesAndEdgesForSchema(
       }
     }
 
-    // Rewire outgoing edges: each internal subflow-output -> subflowNode (proxy) on a
-    // handle equal to its output name, so downstream parent edges can match by sourceHandle.
-    for (const outNode of outputNodes) {
-      const outName = (outNode.settings?.outputName as string) ?? '';
+    // Resolve the output boundary with the shared classifier (same rules as the
+    // server): auto-derive a single-terminal output when there's no explicit
+    // output node, and propagate EVERY valid output to the proxy. If the classifier
+    // reports an ambiguous/orphaned case we still wire the valid outputs (so schema
+    // keeps flowing) and just record an issue — never blank everything.
+    const activeInternal = internalNodes.filter(
+      (n: any) => n.nodeType !== 'system:subflow-input' && n.nodeType !== 'system:subflow-output',
+    );
+    const resolution = resolveSubflowOutputs(
+      activeInternal.map((n: any) => ({ id: n.id })),
+      outputNodes.map((n: any) => ({ id: n.id })),
+      internalEdges.map((e: any) => ({ from: e.source, to: e.target })),
+    );
+    for (const routing of resolution.outputs) {
       expandedEdges.push({
-        id: `proxy_${subflowNode.id}_${outNode.id}`,
-        source: outNode.id,
+        id: `proxy_${subflowNode.id}_${routing.sourceId}`,
+        source: routing.sourceId,
         target: subflowNode.id,
         sourceHandle: null,
-        targetHandle: outName || null,
+        targetHandle: null,
       });
     }
-    // The proxy node forwards each named input to the parent's downstream edges. Since
-    // the schema engine is single-output per node, downstream matching is name-agnostic
-    // here (all outputs merge through the passthrough proxy); the important part is that
-    // the schema reaches the proxy at all. Runtime/codegen handles per-port fan-out.
+    if (resolution.error) {
+      subflowIssues.set(resolution.error.nodeId, {
+        severity: 'error' as any,
+        nodeId: resolution.error.nodeId,
+        message: resolution.error.message,
+      } as SchemaValidationIssue);
+    }
   }
 
-  return { expandedNodes, expandedEdges };
+  return { expandedNodes, expandedEdges, subflowIssues };
 }
 
 export const useSchemaStore = create<SchemaStoreState>((set, get) => {
@@ -272,7 +285,7 @@ export const useSchemaStore = create<SchemaStoreState>((set, get) => {
       // subflowCache is a hidden input to expansion; read it from the store.
       const subflowCache = useWorkflowStore.getState().subflowCache;
 
-      const { expandedNodes, expandedEdges } = expandNodesAndEdgesForSchema(
+      const { expandedNodes, expandedEdges, subflowIssues } = expandNodesAndEdgesForSchema(
         JSON.parse(JSON.stringify(nodes)),
         JSON.parse(JSON.stringify(edges)),
         subflowCache
@@ -314,6 +327,21 @@ export const useSchemaStore = create<SchemaStoreState>((set, get) => {
 
       // Full recomputation
       engine.recomputeAll();
+
+      // Merge any output-boundary issues from expansion onto the offending nodes
+      // (recomputeAll emitted schemas first; we augment their issues without
+      // touching computed columns — schema still propagated for valid outputs).
+      if (subflowIssues.size > 0) {
+        const merged = new Map(get().schemas);
+        for (const [nodeId, issue] of subflowIssues) {
+          const entry = merged.get(nodeId);
+          merged.set(nodeId, {
+            outputSchema: entry?.outputSchema ?? emptySchema(),
+            issues: [...(entry?.issues ?? []), issue],
+          });
+        }
+        set({ schemas: merged });
+      }
     },
 
     getSchema: (nodeId) => {

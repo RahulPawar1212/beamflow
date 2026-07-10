@@ -14,7 +14,7 @@ import { DAG, deserializeWorkflow, serializeWorkflow } from '@beamflow/graph';
 import { buildIR, optimizeIR, validateIR } from '@beamflow/ir';
 import { generatePythonBeam } from '@beamflow/beam-generator';
 import { executePipeline, LocalFeatherStorage, PreviewCacheManager, PreviewManager } from '@beamflow/execution';
-import { generateId, timestamp, SCHEMA_VERSION } from '@beamflow/shared';
+import { generateId, timestamp, SCHEMA_VERSION, resolveSubflowOutputs } from '@beamflow/shared';
 import type { SerializedWorkflow, PreviewRowsResponse } from '@beamflow/shared';
 import type { IStorage } from '../storage.js';
 import { projectsRepo } from '../db/repositories/projects.repo.js';
@@ -463,22 +463,32 @@ export async function pipelineRoutes(
           }
         }
 
-        // Rewire subflow internals to subflowNode (proxy). The proxy node's type was
-        // changed to system:subflow-output above, which has a single required input port
-        // 'in' — so every internal output edge must target 'in' (the proxy acts as a
-        // passthrough merge point). The parent's downstream out-edges keep their original
-        // sourcePortId (the output name) and are restored as-is below for per-output
-        // fan-out at codegen time.
-        for (const internalEdge of internalOutputEdges) {
+        // Resolve which internal nodes feed the subflow's output boundary. This
+        // uses the shared classifier so the boundary is auto-derived when there's
+        // no explicit output node but exactly one terminal, and a clear node-named
+        // error is thrown for ambiguous / orphaned cases (rather than silently
+        // dropping a branch). The proxy (retyped to system:subflow-output) has a
+        // single required 'in' port, so every resolved output routes to 'in'.
+        const outputResolution = resolveSubflowOutputs(
+          activeSubNodes.map((n) => ({ id: n.id, label: (n as any).label })),
+          outputNodes.map((n) => ({ id: n.id })),
+          mappedConnections.map((c) => ({ from: c.sourceNodeId, to: c.targetNodeId })),
+        );
+        if (outputResolution.error) {
+          throw badRequest(outputResolution.error.message, [
+            { severity: 'error', nodeId: outputResolution.error.nodeId, message: outputResolution.error.message },
+          ]);
+        }
+        for (const routing of outputResolution.outputs) {
           expandedConnections.push({
-            id: `rewired_to_proxy_${internalEdge.id}`,
-            sourceNodeId: internalEdge.sourceNodeId,
-            sourcePortId: internalEdge.sourcePortId,
+            id: `rewired_to_proxy_${routing.sourceId}`,
+            sourceNodeId: routing.sourceId,
+            sourcePortId: 'out',
             targetNodeId: subflowNode.id,
             targetPortId: 'in',
           });
         }
-        
+
         // Restore parent out edges, since subflowNode still exists
         expandedConnections.push(...parentOutEdges);
       }

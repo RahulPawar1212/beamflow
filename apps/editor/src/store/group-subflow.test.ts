@@ -76,12 +76,28 @@ describe('createSubflowFromSelection — boundary nodes', () => {
     expect(countTypes(created.nodes)).toEqual({ inputs: 1, outputs: 1 });
   });
 
-  it('A→[B→C]  (tail group, nothing after C) → 1 input, 0 outputs', async () => {
+  it('A→[B→C]  (tail group, single terminal) → 1 input, 1 auto-added output', async () => {
+    // Previously produced 0 outputs (dead-end subflow). Now auto-adds one output
+    // wired to the single terminal C.
     useWorkflowStore.setState({
       nodes: [node('A', false), node('B', true), node('C', true)],
       edges: [edge('e1', 'A', 'B'), edge('e2', 'B', 'C')],
     });
-    await useWorkflowStore.getState().createSubflowFromSelection('Tail');
-    expect(countTypes(created.nodes)).toEqual({ inputs: 1, outputs: 0 });
+    const res = await useWorkflowStore.getState().createSubflowFromSelection('Tail');
+    expect(res.ok).toBe(true);
+    expect(countTypes(created.nodes)).toEqual({ inputs: 1, outputs: 1 });
+  });
+
+  it('tail group with TWO terminals (B and C, both dead-ends) → ambiguity error, no subflow created', async () => {
+    // A→B and A→C, group {B,C}: both are terminals, no outbound edge → ambiguous.
+    useWorkflowStore.setState({
+      nodes: [node('A', false), node('B', true), node('C', true)],
+      edges: [edge('e1', 'A', 'B'), edge('e2', 'A', 'C')],
+    });
+    created = null;
+    const res = await useWorkflowStore.getState().createSubflowFromSelection('Ambiguous');
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/clear output|end at one node|connect an output/i);
+    expect(created).toBeNull(); // never POSTed
   });
 });

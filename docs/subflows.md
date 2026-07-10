@@ -258,6 +258,18 @@ from project ownership and lifecycle.
   Referenced subflows warn but are allowed (user's choice): if `usedByCount > 0` the
   delete confirms with "Used by N workflow(s) … delete anyway?". (Warn-but-allow, not
   hard-block.)
+- **The output boundary is auto-derived.** A subflow doesn't strictly need an explicit
+  `system:subflow-output` node: the shared classifier `resolveSubflowOutputs`
+  (`packages/shared/src/subflow-outputs.ts`, used by both the server `expandSubflows` and
+  the editor's `expandNodesAndEdgesForSchema`) resolves the boundary — if there's no output
+  node but exactly one **terminal** (a node with nothing after it), that terminal's output
+  is used automatically. Grouping a "tail" selection also auto-adds one output up front.
+  Deleting the output node of such a subflow therefore doesn't break it — it re-derives.
+  Genuinely ambiguous cases (0 or >1 terminals with no output node, or an **orphaned**
+  terminal in a multi-output subflow) raise a **clear, node-named error** on generate/run
+  ("add a Subflow Output node…"); design-time schema **degrades gracefully** — valid
+  outputs still propagate their columns downstream, and the offending node just carries a
+  validation issue (nothing blanks).
 - **A workflow referencing a deleted subflow fails gracefully.** `expandSubflows`
   (generate / execute / preview) throws a `badRequest` (400) with a clear, node-named
   message — *"Subflow node \"<label>\" (<id>) references a subflow that no longer exists.
@@ -271,6 +283,7 @@ from project ownership and lifecycle.
 
 | Concern | File |
 |---|---|
+| Output-boundary classifier (auto-derive/ambiguity) | `packages/shared/src/subflow-outputs.ts` (`resolveSubflowOutputs`) |
 | System node defs | `packages/nodes/src/system/{subflow,subflow-input,subflow-output}.ts` |
 | Boundary schema nodes | `packages/nodes/src/schema/{subflow-input,subflow-passthrough}.schema.ts`, registered in `schema/index.ts` |
 | Grouping + save + re-expand | `apps/editor/src/store/workflow-store.ts` |

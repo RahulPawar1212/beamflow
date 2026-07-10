@@ -608,6 +608,39 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       });
     });
 
+    // Tail group (no outbound edge): the subflow would have no output node.
+    // Auto-add one wired to the single terminal selected node so the subflow
+    // returns data. If the selection has 0 or >1 terminals it's ambiguous —
+    // ask the user to pick a clear end node. (The runtime/design-time classifier
+    // is the authoritative safety net; this just gives a good default up front.)
+    if (outboundEdges.length === 0) {
+      const selectedTerminals = selected.filter(
+        (n) => !internalEdges.some((e) => e.source === n.id),
+      );
+      if (selectedTerminals.length !== 1) {
+        return {
+          ok: false,
+          error: 'This selection has no single clear output. Pick a group that ends at one node, or connect an output.',
+        };
+      }
+      const terminal = selectedTerminals[0];
+      const outputId = `node_${nanoid(8)}`;
+      subNodes.push({
+        id: outputId,
+        type: 'system:subflow-output',
+        settings: { outputName: 'Output 1' },
+        position: { x: maxX + 300, y: avgY },
+        label: 'Output 1',
+      });
+      subConnections.push({
+        id: `edge_${nanoid(8)}`,
+        sourceNodeId: terminal.id,
+        sourcePortId: 'out',
+        targetNodeId: outputId,
+        targetPortId: 'in',
+      });
+    }
+
     // Save the subflow to the DB
     let createdSubflow;
     try {

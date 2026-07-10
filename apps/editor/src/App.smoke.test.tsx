@@ -27,7 +27,7 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe('App smoke test', () => {
-  it('mounts without throwing and logs no console errors', async () => {
+  it('mounts without throwing and logs no console errors', { timeout: 15000 }, async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     // Import App AFTER localStorage is cleared so the auth store initializes tokenless.

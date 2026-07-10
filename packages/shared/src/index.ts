@@ -59,3 +59,14 @@ export type {
   SubflowOutputResolution,
   SubflowInputBoundaryResolution,
 } from './subflow-outputs.js';
+
+// Structural graph validation (orphan nodes, unconnected required ports) —
+// shared by DAG.validate() (packages/graph) and the editor's live canvas check.
+export { validateGraphStructure } from './graph-validation.js';
+export type {
+  GraphNodeLite,
+  GraphEdgeLite,
+  GraphPortLite,
+  GraphPortLookup,
+  GraphStructureIssue,
+} from './graph-validation.js';

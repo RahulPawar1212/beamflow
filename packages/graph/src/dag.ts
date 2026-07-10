@@ -16,7 +16,7 @@ import type {
   INodeDefinition,
   ValidationIssue,
 } from '@beamflow/shared';
-import { ValidationSeverity } from '@beamflow/shared';
+import { ValidationSeverity, validateGraphStructure } from '@beamflow/shared';
 import type { NodeRegistry } from '@beamflow/core';
 
 /**
@@ -232,57 +232,39 @@ export class DAG {
       });
     }
 
-    // Check for orphan nodes (no connections at all)
-    for (const [nodeId] of this.nodes) {
-      const hasIncoming = (this.incoming.get(nodeId)?.size || 0) > 0;
-      const hasOutgoing = (this.outgoing.get(nodeId)?.size || 0) > 0;
-
-      if (!hasIncoming && !hasOutgoing) {
-        issues.push({
-          severity: ValidationSeverity.Warning,
-          message: `Node is not connected to any other node.`,
-          nodeId,
-        });
-      }
-    }
-
-    // Check for required input ports without connections
+    // Unknown node types get their own error here (registry lookup isn't part
+    // of the shared structural check below, which just skips types it can't
+    // resolve ports for).
     if (registry) {
       for (const [nodeId, node] of this.nodes) {
-        // Custom/user-authored nodes carry their own IR and are not present in
-        // the server registry — skip registry-dependent checks for them.
         if (node.inlineIR) continue;
-
-        const definition = registry.get(node.type);
-        if (!definition) {
+        if (!registry.get(node.type)) {
           issues.push({
             severity: ValidationSeverity.Error,
             message: `Unknown node type "${node.type}". The required plugin may not be loaded.`,
             nodeId,
           });
-          continue;
-        }
-
-        // Check required input ports
-        const inputPorts = definition.ports.filter(
-          (p) => p.direction === 'input' && p.required,
-        );
-        for (const port of inputPorts) {
-          const hasConnection = Array.from(this.incoming.get(nodeId) || []).some(
-            (edgeId) => {
-              const edge = this.edges.get(edgeId);
-              return edge?.targetPortId === port.id;
-            },
-          );
-          if (!hasConnection) {
-            issues.push({
-              severity: ValidationSeverity.Error,
-              message: `Required input port "${port.name}" is not connected.`,
-              nodeId,
-            });
-          }
         }
       }
+    }
+
+    // Orphan nodes + unconnected required input ports — shared with the
+    // editor's live canvas check (packages/shared/src/graph-validation.ts).
+    const structureIssues = validateGraphStructure(
+      Array.from(this.nodes.values()).map((n) => ({ id: n.id, type: n.type, hasInlineIR: !!n.inlineIR })),
+      this.getAllEdges().map((e) => ({
+        sourceNodeId: e.sourceNodeId,
+        targetNodeId: e.targetNodeId,
+        targetPortId: e.targetPortId,
+      })),
+      registry ? (nodeType) => registry.get(nodeType)?.ports : undefined,
+    );
+    for (const si of structureIssues) {
+      issues.push({
+        severity: si.severity === 'error' ? ValidationSeverity.Error : ValidationSeverity.Warning,
+        message: si.message,
+        nodeId: si.nodeId,
+      });
     }
 
     return issues;

@@ -34,8 +34,9 @@ import type {
   SchemaChangeEvent,
 } from '@beamflow/schema';
 import { registerBuiltinSchemaNodes } from '@beamflow/nodes';
-import { resolveSubflowOutputs, resolveSubflowInputBoundary } from '@beamflow/shared';
+import { resolveSubflowOutputs, resolveSubflowInputBoundary, validateGraphStructure } from '@beamflow/shared';
 import { useWorkflowStore } from '../store/workflow-store';
+import { isCustomType } from '../customNodes';
 import { trace } from './trace';
 
 // ─── One-time registration of built-in schema node factories ─────────────────
@@ -321,11 +322,39 @@ export const useSchemaStore = create<SchemaStoreState>((set, get) => {
       // subflowCache is a hidden input to expansion; read it from the store.
       const subflowCache = useWorkflowStore.getState().subflowCache;
 
+      // Structural check (orphan nodes, unconnected required input ports) —
+      // the SAME logic the server enforces at Generate/Execute time
+      // (DAG.validate(), packages/graph/src/dag.ts), but run live on the
+      // literal parent canvas graph so it's visible the moment it happens,
+      // not just when the user hits Generate.
+      const nodeDefinitions = useWorkflowStore.getState().nodeDefinitions;
+      const portsByType = new Map(nodeDefinitions.map((d) => [d.type, d.ports]));
+      const structureIssues = validateGraphStructure(
+        nodes.map((n) => ({ id: n.id, type: n.nodeType, hasInlineIR: isCustomType(n.nodeType) })),
+        edges.map((e) => ({
+          sourceNodeId: e.source,
+          targetNodeId: e.target,
+          targetPortId: e.targetHandle || 'in',
+        })),
+        (nodeType) => portsByType.get(nodeType),
+      );
+
       const { expandedNodes, expandedEdges, subflowIssues } = expandNodesAndEdgesForSchema(
         JSON.parse(JSON.stringify(nodes)),
         JSON.parse(JSON.stringify(edges)),
         subflowCache
       );
+
+      for (const si of structureIssues) {
+        const existing = subflowIssues.get(si.nodeId);
+        const issue: SchemaValidationIssue = {
+          severity: si.severity as any,
+          nodeId: si.nodeId,
+          message: si.message,
+        };
+        if (existing) existing.push(issue);
+        else subflowIssues.set(si.nodeId, [issue]);
+      }
 
       // Register all nodes
       for (const node of expandedNodes) {

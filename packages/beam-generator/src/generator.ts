@@ -66,6 +66,16 @@ interface GenerationContext {
    * composite's own constructor parameters (IRCompositeParameter).
    */
   readonly paramOverrides?: ReadonlyMap<string, ReadonlyMap<string, string>>;
+  /**
+   * Python expression that evaluates to the enclosing `beam.Pipeline`
+   * object, valid in the scope currently being emitted. `'p'` at the top
+   * level (bound by `with beam.Pipeline(...) as p:`); inside a composite's
+   * expand(), `p` doesn't exist, so this is a `<some_pcoll>.pipeline`
+   * expression instead. Source-type steps with zero inputs (ReadFromCSV/
+   * JSON/SQL) use this to reach the Pipeline object when they're not the
+   * outermost step in the file.
+   */
+  readonly pipelineVarExpr: string;
 }
 
 /** One planned class: its final Python name and how to emit/instantiate it. */
@@ -525,7 +535,7 @@ const operationHandlers = new Map<string, OperationClassHandler>([
 // ─── Helper Functions ───────────────────────────────────────────────────────
 
 function getInputVar(step: IRStep, ctx: GenerationContext): string {
-  if (step.inputs.length === 0) return 'p';
+  if (step.inputs.length === 0) return ctx.pipelineVarExpr;
   return inputVarExpr(step, 0, ctx);
 }
 
@@ -796,7 +806,21 @@ function emitCompositeClass(
     pipeline: subPipeline,
     classPlan: ctx.classPlan,
     paramOverrides: nestedParamOverrides,
+    // Inside expand(), there is no top-level `p` — only pcoll/pcolls exist.
+    // A nested step with zero inputs (e.g. a source node placed directly
+    // inside a subflow/custom node, rather than reading from a
+    // SubflowInput boundary) still needs the real Pipeline object to attach
+    // to, which we bind as a local `p` below when needed.
+    pipelineVarExpr: 'p',
   };
+
+  const needsPipelineVar = subPipeline.steps.some(
+    (s) => s.operation !== 'SubflowInput' && s.operation !== 'SubflowOutput' && s.inputs.length === 0,
+  );
+  if (needsPipelineVar) {
+    const pipelineSource = inputNames.length > 1 ? `next(iter(${expandArg}.values()))` : expandArg;
+    emitter.line(`p = ${pipelineSource}.pipeline`);
+  }
 
   // Bind SubflowInput steps directly to the incoming pcoll(s) — virtual,
   // never dispatched to a handler.
@@ -869,7 +893,7 @@ export function generatePythonBeam(pipeline: IRPipeline): GeneratedPipeline {
   for (const step of pipeline.steps) {
     topVarNames.set(step.id, toPythonVar(`step_${step.id}`));
   }
-  const topContext: GenerationContext = { varNames: topVarNames, pipeline, classPlan };
+  const topContext: GenerationContext = { varNames: topVarNames, pipeline, classPlan, pipelineVarExpr: 'p' };
 
   for (const entry of classPlan.values()) {
     entry.emitClass(emitter, topContext);

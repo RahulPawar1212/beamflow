@@ -216,6 +216,40 @@ describe('Beam Generator Package', () => {
       };
     }
 
+    it('binds a local pipeline var when a nested step is a zero-input source (not a SubflowInput)', () => {
+      // A subflow/custom node can start with a real source (e.g. CSV Source)
+      // instead of reading from a system:subflow-input boundary. Inside
+      // expand(), there is no top-level `p` — only pcoll/pcolls — so a
+      // zero-input step must bind `p = pcoll.pipeline` locally, or it
+      // raises NameError: name 'p' is not defined at runtime.
+      const subPipeline = {
+        id: 'sf_src', name: 'Subflow With Source', version: '1.0.0',
+        steps: [
+          { id: 'src', label: 'CSV Source', type: IRStepType.Read, operation: 'ReadFromCSV', params: { filePath: 'a.csv' }, inputs: [], imports: [] },
+          { id: 'filt', label: 'Filter', type: IRStepType.Transform, operation: 'Filter', params: { field: 'x', operator: '==', value: '1' }, inputs: ['src'], imports: [] },
+        ],
+        connections: [],
+      };
+      const pipeline = {
+        id: 'p', name: 'Parent', version: '1.0.0',
+        steps: [
+          {
+            id: 'proxy', label: 'Subflow With Source', type: IRStepType.Transform, operation: 'Subflow',
+            params: { subflowId: 'sf_src' }, inputs: [], imports: [],
+            subPipeline,
+            compositeParams: [], compositeParamOverrides: {},
+            compositeOutputs: [{ sourceStepId: 'filt' }],
+            compositeInputNames: ['in'],
+            compositeSourceName: 'Subflow With Source', compositeSourceId: 'sf_src',
+          },
+        ],
+        connections: [],
+      };
+      const generated = generatePythonBeam(pipeline as any);
+      expect(generated.code).toContain('p = pcoll.pipeline');
+      expect(generated.code).toContain("p | 'CSV Source' >> ReadFromCSVTransform(");
+    });
+
     it('emits a composite class with expand() wrapping the nested pipeline', () => {
       const pipeline = {
         id: 'p', name: 'Parent', version: '1.0.0',

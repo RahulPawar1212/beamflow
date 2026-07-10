@@ -25,6 +25,10 @@ vi.mock('@beamflow/execution', async (importOriginal) => {
     PreviewCacheManager: class PreviewCacheManager {
       async updateMetadata() {}
       async getPreviewPage() { return { data: [], totalRows: 0, page: 1, pageSize: 100, status: 'ready' }; }
+      // The PUT /pipelines/:id route invalidates previews on save; without this
+      // the mock threw (undefined is not a function) → 500 → the workflow never
+      // saved → later generate saw an empty graph → 400. Both stale failures.
+      async invalidatePreviews() {}
     },
     PreviewManager: class PreviewManager {
       async triggerPreview() {}

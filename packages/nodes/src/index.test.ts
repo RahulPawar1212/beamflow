@@ -4,8 +4,13 @@ import { builtinNodes, builtinNodesPlugin } from './index.js';
 
 describe('@beamflow/nodes package', () => {
   describe('builtinNodes array', () => {
-    it('contains the 7 built-in nodes', () => {
-      expect(builtinNodes).toHaveLength(7);
+    it('contains the built-in nodes (built-ins + system subflow nodes)', () => {
+      // Don't hardcode a count — it changes as node types are added (was 7,
+      // now 10 with the subflow system nodes). Assert the shape instead.
+      expect(builtinNodes.length).toBeGreaterThanOrEqual(10);
+      const types = builtinNodes.map((n) => n.type);
+      expect(types).toContain('beamflow:csv-source');
+      expect(types).toContain('system:subflow');
     });
 
     it('has a unique type for every node', () => {
@@ -15,7 +20,9 @@ describe('@beamflow/nodes package', () => {
 
     it('every node exposes the required INodeDefinition surface', () => {
       for (const node of builtinNodes) {
-        expect(node.type).toMatch(/^beamflow:/);
+        // Types are namespaced (beamflow:* for data nodes, system:* for subflow
+        // boundary/proxy nodes).
+        expect(node.type).toMatch(/^(beamflow|system):/);
         expect(typeof node.name).toBe('string');
         expect(typeof node.toIR).toBe('function');
         expect(typeof node.validate).toBe('function');

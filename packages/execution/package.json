@@ -19,6 +19,10 @@
     "dev": "tsc --watch"
   },
   "dependencies": {
+    "@beamflow/beam-generator": "workspace:*",
+    "@beamflow/core": "workspace:*",
+    "@beamflow/graph": "workspace:*",
+    "@beamflow/ir": "workspace:*",
     "@beamflow/shared": "workspace:*",
     "apache-arrow": "^21.1.0",
     "nanoid": "^5.1.0"

@@ -1,0 +1,37 @@
+name: CI
+
+# Runs on every push and pull request. Catches broken builds, type regressions,
+# and test failures (including the App mount smoke test) before they reach main.
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # pnpm version comes from the root package.json "packageManager" field.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # `build` is also the typecheck: every package runs `tsc` (editor `tsc -b`).
+      - name: Build (typecheck + bundle)
+        run: pnpm build
+
+      # All suites incl. the editor App smoke test. Server tests use in-memory
+      # SQLite under NODE_ENV=test; no Python or external DB required.
+      - name: Test
+        run: pnpm test
+
+      # NOTE: no lint step yet — `turbo run lint` is currently a no-op (no eslint
+      # config exists). Add a real lint step once ESLint is configured.

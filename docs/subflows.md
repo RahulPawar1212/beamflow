@@ -163,7 +163,24 @@ saved before this scheme still expand:
   matched input node; unmatched → input `[0]`.
 - **Canvas rendering** (`apps/editor/src/components/nodes/CustomNodes.tsx`) reads the
   referenced subflow's boundary node names from `subflowCache` and draws one handle per
-  named port when a subflow has more than one input or output.
+  named port for **any** resolved subflow definition (falls back to a single generic
+  `in`/`out` handle when a boundary has zero named nodes — self-contained subflows, or
+  auto-derived outputs with no explicit `system:subflow-output` node).
+
+> **Gotcha: async handle resolution + React Flow's handle-position cache.**
+> `subflowCache[subflowId]` loads asynchronously, so a subflow proxy first mounts with
+> no resolved definition (generic handles) and only later re-renders with named handles
+> once the fetch resolves. React Flow measures each `Handle`'s position once and does
+> **not** automatically re-measure just because the node re-rendered with a different
+> handle set — an edge referencing a handle id that didn't exist at the last measurement
+> silently fails to draw (no console error). Two bugs compounded here previously: (1)
+> the named-handle branch only activated with 2+ named ports, so a subflow with exactly
+> one named output/input fell through to the generic branch's hardcoded `id="out"`/
+> `id="in"`, and (2) even after fixing that, the handle-position cache still needed an
+> explicit nudge. Both are fixed: the named-port branch now covers any resolved
+> definition, and `BaseNode` calls React Flow's `useUpdateNodeInternals()(id)` in a
+> `useEffect` keyed on the resolved port names, so React Flow re-measures whenever the
+> handle set actually changes.
 
 ---
 

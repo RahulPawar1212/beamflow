@@ -153,9 +153,10 @@ exactly this.
 ## 3. Maintenance level — keeping entropy out (short & long term)
 
 ### Short term (do these in the next couple of weeks)
-1. **Stand up CI** (GitHub Actions) that runs on every push: `pnpm build`, `pnpm lint`,
-   `pnpm test`, `tsc`. This alone catches broken builds and type regressions before they
-   reach you. (There is **no CI today** — this is the biggest single gap.)
+1. ✅ **CI is now set up** (GitHub Actions) — runs `pnpm install --frozen-lockfile` →
+   `pnpm build` (the typecheck) → `pnpm test` on every push/PR. See
+   [ci.md](ci.md) for how it works. Remaining: enable **branch protection** on `main`
+   (require the CI check before merge) and add a real `lint` step once ESLint exists.
 2. **Add a headless mount smoke test to CI** (§5). Two bugs this session were invisible
    to unit tests and only a mount check catches them.
 3. **Fix the known-broken tests.** The server suite has ~4 stale failures (node-count

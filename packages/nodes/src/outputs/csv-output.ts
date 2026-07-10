@@ -34,7 +34,7 @@ export const csvOutput = defineNode({
 
   settings: [
     textSetting('filePath', 'Output File Path', {
-      description: 'Path where the CSV file will be written.',
+      description: 'File name prefix — Beam appends a shard suffix, e.g. this becomes "-00000-of-00001". Enter a full file path (not a folder); a bare folder path writes a same-named FILE next to it, not into it.',
       placeholder: '/path/to/output.csv',
       required: true,
       group: 'Output',

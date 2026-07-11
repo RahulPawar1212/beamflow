@@ -788,19 +788,32 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     state.setSaving(true);
     try {
       const workflow = state.toWorkflow();
+      // Identity of the copy comes from the SAVED record, not from in-memory
+      // state: the copy is "another one of whatever the source pipeline IS", and
+      // the DB is the authority on that. In-memory isSubflow has drifted before
+      // (stale bundles, navigation bugs) and Duplicate goes through CREATE — the
+      // one write the server's identity lock can't pin — so a drifted flag here
+      // used to mint a workflow permanently disguised as a subflow.
+      let isSubflow = state.isSubflow;
+      if (state.pipelineId) {
+        const source = await api.getPipeline(state.pipelineId);
+        isSubflow = !!source.metadata.isSubflow;
+      }
       const newName = state.pipelineName.includes('Copy') ? state.pipelineName : `${state.pipelineName} (Copy)`;
       const created = await api.createPipeline({
         name: newName,
-        isSubflow: workflow.metadata.isSubflow,
+        isSubflow,
         parameters: workflow.metadata.parameters,
         projectId: state.currentProjectId ?? undefined,
         nodes: workflow.nodes,
         connections: workflow.connections
       });
-      // Switch context to the newly created pipeline
-      set({ 
-        pipelineId: created.metadata.id, 
-        pipelineName: newName 
+      // Switch context to the newly created pipeline — and re-align the
+      // in-memory identity with what was actually persisted.
+      set({
+        pipelineId: created.metadata.id,
+        pipelineName: newName,
+        isSubflow,
       });
       state.markSaved();
       state.addToast('success', 'Workflow duplicated successfully');

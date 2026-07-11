@@ -26,6 +26,7 @@ export function Toolbar() {
   
   const pipelineName = useWorkflowStore((s) => s.pipelineName);
   const pipelineId = useWorkflowStore((s) => s.pipelineId);
+  const isSubflow = useWorkflowStore((s) => s.isSubflow);
   const setPipelineName = useWorkflowStore((s) => s.setPipelineName);
   const isGenerating = useWorkflowStore((s) => s.isGenerating);
   const isExecuting = useWorkflowStore((s) => s.isExecuting);
@@ -230,6 +231,17 @@ export function Toolbar() {
             spellCheck={false}
             className="text-sm bg-transparent border border-transparent rounded-md px-1.5 py-0.5 outline-none text-[var(--color-text-secondary)] hover:border-[var(--color-border)] focus:border-indigo-500/50 focus:text-[var(--color-text-primary)] min-w-0 w-full max-w-[280px] font-medium transition-colors truncate"
           />
+          {/* Identity badge: make "the editor thinks this is a subflow" VISIBLE.
+              Identity drift used to be silent until a save/duplicate persisted it. */}
+          {isSubflow && (
+            <span
+              title="This pipeline is a subflow (edited from the Subflow Library or a subflow node)"
+              className="flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-cyan-500/15 text-cyan-400 text-[10px] font-bold shrink-0"
+            >
+              <Boxes size={10} />
+              <span className="hidden md:inline">Subflow</span>
+            </span>
+          )}
           {/* Dirty / saved indicator */}
           <SaveStatus isDirty={isDirty} isSaving={isSaving} />
         </div>
@@ -899,6 +911,10 @@ function WorkflowSwitcherModal({
                             const newName = pData.metadata.name.includes('Copy') ? pData.metadata.name : `${pData.metadata.name} (Copy)`;
                             const created = await api.createPipeline({
                               name: newName,
+                              // Copy identity and parameters from the source record —
+                              // omitting them silently dropped pipeline parameters.
+                              isSubflow: pData.metadata.isSubflow || false,
+                              parameters: pData.metadata.parameters,
                               projectId: currentProjectId ?? undefined,
                               nodes: pData.nodes,
                               connections: pData.connections

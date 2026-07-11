@@ -36,6 +36,17 @@ const { useWorkflowStore } = await import('../store/workflow-store');
 const { useSchemaStore } = await import('../lib/schema-store');
 const { api } = await import('../api/client');
 const createMock = api.createPipeline as unknown as ReturnType<typeof vi.fn>;
+const getMock = api.getPipeline as unknown as ReturnType<typeof vi.fn>;
+
+/** Make GET /pipelines/:id answer with a saved record (the identity authority). */
+function serveSavedRecord(record: { id?: string; isSubflow: boolean; nodes?: any[] }) {
+  getMock.mockImplementation(async (id: string) => ({
+    schemaVersion: '1.0.0',
+    metadata: { id: record.id ?? id, name: 'saved', isSubflow: record.isSubflow, createdAt: '', updatedAt: '' },
+    nodes: record.nodes ?? [],
+    connections: [],
+  }));
+}
 
 function load(nodes: any[], meta: Partial<SerializedWorkflowDTO['metadata']> = {}) {
   useWorkflowStore.getState().loadWorkflow({
@@ -57,6 +68,8 @@ beforeEach(() => {
     { type: 'system:subflow-output', name: 'Subflow Output', category: 'output', icon: 'out', ports: [], settings: [] } as any,
   ]);
   createMock.mockClear();
+  getMock.mockReset();
+  getMock.mockImplementation(async () => { throw new Error('no subflow'); });
 });
 
 describe('isSubflow is explicit identity, preserved from metadata', () => {
@@ -124,6 +137,7 @@ describe('save & duplicate preserve identity', () => {
   });
 
   it('duplicating a subflow keeps the copy a subflow', async () => {
+    serveSavedRecord({ isSubflow: true });
     load(
       [{ id: 'out', type: 'system:subflow-output', settings: { outputName: 'Output 1' } }],
       { isSubflow: true },
@@ -133,12 +147,43 @@ describe('save & duplicate preserve identity', () => {
   });
 
   it('duplicating a parent keeps the copy a parent', async () => {
+    serveSavedRecord({ isSubflow: false });
     load(
       [{ id: 'sf', type: 'system:subflow', settings: { subflowId: 'x' } }],
       { isSubflow: false },
     );
     await useWorkflowStore.getState().duplicateWorkflow();
     expect(createMock).toHaveBeenCalledWith(expect.objectContaining({ isSubflow: false }));
+  });
+
+  // The field incident: in-memory isSubflow drifted to true (stale bundle /
+  // navigation bug) while an ordinary WORKFLOW was open, and Duplicate minted a
+  // permanent workflow-shaped "subflow". The copy's identity must come from the
+  // SAVED record, not from whatever the session state currently claims.
+  it('duplicate takes identity from the saved record, not drifted in-memory state', async () => {
+    serveSavedRecord({ isSubflow: false });
+    load(
+      [{ id: 'flt', type: 'beamflow:filter', settings: {} }],
+      { id: 'parent_1', isSubflow: false },
+    );
+    // Simulate the drift: something wrongly flipped the session flag.
+    useWorkflowStore.setState({ isSubflow: true });
+
+    await useWorkflowStore.getState().duplicateWorkflow();
+
+    expect(createMock).toHaveBeenCalledWith(expect.objectContaining({ isSubflow: false }));
+    // And the drifted session flag is re-aligned with reality afterwards.
+    expect(useWorkflowStore.getState().isSubflow).toBe(false);
+  });
+
+  it('duplicate aborts (creates nothing) when the saved record cannot be fetched', async () => {
+    getMock.mockImplementation(async () => { throw new Error('offline'); });
+    load([{ id: 'flt', type: 'beamflow:filter', settings: {} }], { id: 'parent_1', isSubflow: false });
+
+    const result = await useWorkflowStore.getState().duplicateWorkflow();
+
+    expect(result).toBeNull();
+    expect(createMock).not.toHaveBeenCalled();
   });
 });
 

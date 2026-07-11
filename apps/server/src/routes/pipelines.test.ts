@@ -182,6 +182,66 @@ describe('pipeline routes', () => {
       expect(got.json().metadata.isSubflow).toBe(false);
     });
 
+    it('POST rejects isSubflow: true when the graph has no subflow boundary nodes (drifted-client guard)', async () => {
+      // The exact corruption seen in the field: a client whose in-memory
+      // isSubflow drifted to true duplicates an ordinary workflow. Creation is
+      // the only write where identity is taken from the request, so this is
+      // where a workflow-shaped "subflow" must be refused — otherwise the
+      // update lock makes the bogus identity permanent.
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/pipelines',
+        headers: { Authorization: `Bearer ${token}` },
+        payload: {
+          name: 'SQL data filter (Copy)',
+          isSubflow: true,
+          nodes: [
+            { id: 'src', type: 'beamflow:csv-source', settings: {}, position: { x: 0, y: 0 } },
+            { id: 'proxy', type: 'system:subflow', settings: { subflowId: 'sf_1' }, position: { x: 100, y: 0 } },
+            { id: 'flt', type: 'beamflow:filter', settings: {}, position: { x: 200, y: 0 } },
+            { id: 'out', type: 'beamflow:csv-output', settings: {}, position: { x: 300, y: 0 } },
+          ],
+          connections: [],
+        },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().message || JSON.stringify(res.json())).toContain('subflow');
+    });
+
+    it('POST accepts a genuine subflow (has boundary nodes) and an ordinary workflow', async () => {
+      const subflow = await app.inject({
+        method: 'POST',
+        url: '/api/pipelines',
+        headers: { Authorization: `Bearer ${token}` },
+        payload: {
+          name: 'Genuine Subflow',
+          isSubflow: true,
+          nodes: [
+            { id: 'flt', type: 'beamflow:filter', settings: {}, position: { x: 0, y: 0 } },
+            { id: 'out', type: 'system:subflow-output', settings: { outputName: 'Output 1' }, position: { x: 100, y: 0 } },
+          ],
+        },
+      });
+      expect(subflow.statusCode).toBe(201);
+      expect(subflow.json().metadata.isSubflow).toBe(true);
+
+      // A workflow containing a subflow PROXY is still a workflow — the guard
+      // must not misread proxies as boundary nodes.
+      const workflow = await app.inject({
+        method: 'POST',
+        url: '/api/pipelines',
+        headers: { Authorization: `Bearer ${token}` },
+        payload: {
+          name: 'Parent With Proxy',
+          nodes: [
+            { id: 'proxy', type: 'system:subflow', settings: { subflowId: 'sf_1' }, position: { x: 0, y: 0 } },
+          ],
+        },
+      });
+      expect(workflow.statusCode).toBe(201);
+      expect(workflow.json().metadata.isSubflow).toBe(false);
+    });
+
     it('returns 404 for get/update/delete of a missing pipeline', async () => {
       expect((await app.inject({
         method: 'GET',
@@ -327,6 +387,10 @@ describe('pipeline routes', () => {
       // boundary — failed graph validation with a false-positive
       // "Required input port \"Input\" is not connected."
       const now = '2024-01-01T00:00:00.000Z';
+      // Creation always carries a boundary node (the create guard requires it,
+      // matching the editor which auto-adds one when grouping). The boundary-less
+      // self-contained shape arises AFTERWARDS by the user deleting the output
+      // node — identity is preserved through the update.
       const subflowCreate = await app.inject({
         method: 'POST',
         url: '/api/pipelines',
@@ -337,14 +401,33 @@ describe('pipeline routes', () => {
           nodes: [
             { id: 'inner_src', type: 'beamflow:csv-source', settings: { filePath: '/inner.csv' }, position: { x: 0, y: 0 } },
             { id: 'inner_filter', type: 'beamflow:filter', settings: { field: 'age', operator: '>', value: '18' }, position: { x: 100, y: 0 } },
+            { id: 'inner_out', type: 'system:subflow-output', settings: { outputName: 'Output 1' }, position: { x: 200, y: 0 } },
           ],
           connections: [
             { id: 'ie1', sourceNodeId: 'inner_src', sourcePortId: 'out', targetNodeId: 'inner_filter', targetPortId: 'in' },
+            { id: 'ie2', sourceNodeId: 'inner_filter', sourcePortId: 'out', targetNodeId: 'inner_out', targetPortId: 'in' },
           ],
         },
       });
       expect(subflowCreate.statusCode).toBe(201);
       const subflowId = subflowCreate.json().metadata.id;
+
+      // User deletes the boundary output node while editing the subflow — the
+      // output becomes derived (terminal node) and identity must survive.
+      const subflowDoc = subflowCreate.json() as SerializedWorkflow;
+      const boundaryless = {
+        ...subflowDoc,
+        nodes: subflowDoc.nodes.filter((n) => n.id !== 'inner_out'),
+        connections: subflowDoc.connections.filter((c) => c.id !== 'ie2'),
+      };
+      const subflowUpdate = await app.inject({
+        method: 'PUT',
+        url: `/api/pipelines/${subflowId}`,
+        headers: { Authorization: `Bearer ${token}` },
+        payload: boundaryless,
+      });
+      expect(subflowUpdate.statusCode).toBe(200);
+      expect(subflowUpdate.json().metadata.isSubflow).toBe(true);
 
       const created = await app.inject({
         method: 'POST',
@@ -535,7 +618,13 @@ describe('workflowsRepo identity guarantee (real DrizzleStorage)', () => {
       method: 'POST',
       url: '/api/pipelines',
       headers: { Authorization: `Bearer ${token}` },
-      payload: { name: 'Real Subflow', isSubflow: true },
+      payload: {
+        name: 'Real Subflow',
+        isSubflow: true,
+        nodes: [
+          { id: 'out', type: 'system:subflow-output', settings: { outputName: 'Output 1' }, position: { x: 0, y: 0 } },
+        ],
+      },
     });
     const id = created.json().metadata.id;
     expect(created.json().metadata.isSubflow).toBe(true);

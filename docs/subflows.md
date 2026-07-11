@@ -92,6 +92,48 @@ The main pipeline **list** (`GET /api/pipelines`) hides subflows by default; pas
 `?includeSubflows=true` to include them, or `?subflowsOnly=true` for the shared library
 (§10). A subflow's `projectId` is **null** — subflows are not project-scoped (§10).
 
+### 3.1 `isSubflow` is locked identity — guarded at every write
+
+`isSubflow` is **explicit identity**: decided once when the pipeline is created, never
+derived from the graph, and never changed by an ordinary save. Three incidents of
+"my workflow turned into a subflow" (it then vanishes from the Workflows list and shows
+up in the Subflow Library) taught us that every write path needs its own guard, because
+the flag travels from drifting client state:
+
+- **Update is pinned** (`workflowsRepo.update`, mirrored in `PUT /api/pipelines/:id`):
+  the repo re-reads the existing row and keeps its `isSubflow` no matter what the
+  request body claims. This is the single choke point for every workflow write, so a
+  stale or buggy client can never flip identity on save.
+- **Create is structurally validated** (`POST /api/pipelines`): creation is the only
+  write where identity is taken from the request — and therefore the only place a bogus
+  claim can be minted. Every legitimately created subflow has at least one
+  `system:subflow-input`/`system:subflow-output` boundary node (grouping auto-adds one,
+  §2). A create claiming `isSubflow: true` over a plain workflow graph is rejected with
+  a 400. Note the guard applies **only at creation**: deleting boundary nodes from a
+  real subflow later goes through update, which preserves identity (a subflow with no
+  explicit output falls back to derived outputs, §5).
+- **Duplicate copies identity from the saved record, not from session state**
+  (`duplicateWorkflow` in `workflow-store.ts`): the copy is "another one of whatever
+  the source pipeline *is*", and the DB is the authority on that. In-memory `isSubflow`
+  has drifted before (stale dev bundles, navigation bugs), and Duplicate goes through
+  create — the one write the update lock can't pin — so it fetches the source via
+  `GET /api/pipelines/:id` and uses *its* flag, re-aligning the session state afterwards.
+  The per-row Duplicate in the Workflows modal likewise passes `isSubflow` +
+  `parameters` from the fetched record.
+- **Identity is visible**: the Toolbar shows a cyan "Subflow" badge next to the pipeline
+  name whenever the open pipeline is a subflow, so drift is spotted before a save
+  persists it instead of after.
+
+If a record was corrupted before these guards existed, it is identifiable by
+`is_subflow = 1` with no boundary nodes in `settings_json`. Repair means flipping the
+flag in **both** the `is_subflow` column and the embedded `metadata.isSubflow`, and
+assigning a `project_id` — a workflow with a null project is invisible in the
+project-scoped Workflows list.
+
+Regression coverage: `apps/server/src/routes/pipelines.test.ts` (create guard, PUT
+lock down to the repo) and `apps/editor/src/lib/subflow-flag.test.ts` (identity
+preserved across load/serialize/navigation, duplicate-under-drift).
+
 ---
 
 ## 4. Two paths: flatten for preview/schema, compile to PTransform for code

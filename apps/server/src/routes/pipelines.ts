@@ -187,6 +187,29 @@ export async function pipelineRoutes(
         const id = generateId('pipeline');
         const now = timestamp();
         const isSubflow = (req.body as Record<string, any>)?.isSubflow || false;
+        const nodes = ((req.body as Record<string, any>)?.nodes || []) as Array<{ type?: string }>;
+
+        // isSubflow is IDENTITY, and creation is the only moment it can be set —
+        // so creation is where a bogus claim must be stopped. Every legitimate
+        // subflow creation path (grouping a selection, duplicating a real subflow)
+        // produces a graph with at least one system:subflow-input/-output boundary
+        // node. A create request claiming isSubflow with a plain workflow graph is
+        // a client bug (e.g. drifted editor state or a stale bundle) that used to
+        // silently mint a workflow-shaped "subflow" — and the update lock then made
+        // it unrepairable. Reject it loudly instead. (Deleting boundary nodes from
+        // a real subflow LATER is fine — that goes through update, which preserves
+        // identity; this guard applies only at creation.)
+        if (isSubflow) {
+          const hasBoundaryNode = nodes.some(
+            (n) => n?.type === 'system:subflow-input' || n?.type === 'system:subflow-output',
+          );
+          if (!hasBoundaryNode) {
+            throw badRequest(
+              'Refusing to create a subflow without any subflow-input/output boundary nodes — ' +
+              'this graph is a regular workflow. (Stale editor state? Reload the app and retry.)',
+            );
+          }
+        }
 
         // Subflows are a USER-GLOBAL shared library — reusable across all projects —
         // so they are NOT tied to a project (projectId stays null). Regular

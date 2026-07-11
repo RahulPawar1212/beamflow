@@ -150,6 +150,38 @@ describe('pipeline routes', () => {
       expect(gone.statusCode).toBe(404);
     });
 
+    it('PUT cannot flip isSubflow — identity is locked at creation, ignoring the request body', async () => {
+      // A plain workflow (isSubflow defaults to false).
+      const created = await app.inject({
+        method: 'POST',
+        url: '/api/pipelines',
+        headers: { Authorization: `Bearer ${token}` },
+        payload: { name: 'Plain Workflow' },
+      });
+      const id = created.json().metadata.id;
+      expect(created.json().metadata.isSubflow).toBe(false);
+
+      // A buggy/stale client sends isSubflow: true on an ordinary save (e.g. the
+      // editor navigated through a subflow and its in-memory identity leaked).
+      const workflow = created.json() as SerializedWorkflow;
+      const updated = await app.inject({
+        method: 'PUT',
+        url: `/api/pipelines/${id}`,
+        headers: { Authorization: `Bearer ${token}` },
+        payload: { ...workflow, metadata: { ...workflow.metadata, isSubflow: true } },
+      });
+      expect(updated.statusCode).toBe(200);
+      expect(updated.json().metadata.isSubflow).toBe(false);
+
+      // Persisted record is unaffected too, not just the response body.
+      const got = await app.inject({
+        method: 'GET',
+        url: `/api/pipelines/${id}`,
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      expect(got.json().metadata.isSubflow).toBe(false);
+    });
+
     it('returns 404 for get/update/delete of a missing pipeline', async () => {
       expect((await app.inject({
         method: 'GET',

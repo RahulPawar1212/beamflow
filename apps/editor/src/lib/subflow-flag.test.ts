@@ -141,3 +141,44 @@ describe('save & duplicate preserve identity', () => {
     expect(createMock).toHaveBeenCalledWith(expect.objectContaining({ isSubflow: false }));
   });
 });
+
+describe("entering/exiting a subflow preserves the parent's identity", () => {
+  it('double-clicking into a subflow and exiting leaves the parent isSubflow=false', () => {
+    load(
+      [{ id: 'sf', type: 'system:subflow', settings: { subflowId: 'child_1' } }],
+      { id: 'parent_1', isSubflow: false },
+    );
+    useWorkflowStore.getState().enterSubflow({
+      schemaVersion: '1.0.0',
+      metadata: { id: 'child_1', name: 'child', isSubflow: true, createdAt: '', updatedAt: '' },
+      nodes: [{ id: 'out', type: 'system:subflow-output', settings: { outputName: 'Output 1' } }],
+      connections: [],
+    } as SerializedWorkflowDTO);
+    expect(useWorkflowStore.getState().isSubflow).toBe(true);
+
+    useWorkflowStore.getState().exitSubflow();
+    expect(useWorkflowStore.getState().pipelineId).toBe('parent_1');
+    expect(useWorkflowStore.getState().isSubflow).toBe(false);
+    expect(useWorkflowStore.getState().toWorkflow().metadata.isSubflow).toBe(false);
+  });
+
+  it('saving after exiting a subflow persists the parent as isSubflow=false', async () => {
+    load(
+      [{ id: 'sf', type: 'system:subflow', settings: { subflowId: 'child_1' } }],
+      { id: 'parent_1', isSubflow: false },
+    );
+    useWorkflowStore.getState().enterSubflow({
+      schemaVersion: '1.0.0',
+      metadata: { id: 'child_1', name: 'child', isSubflow: true, createdAt: '', updatedAt: '' },
+      nodes: [{ id: 'out', type: 'system:subflow-output', settings: { outputName: 'Output 1' } }],
+      connections: [],
+    } as SerializedWorkflowDTO);
+    useWorkflowStore.getState().exitSubflow();
+
+    await useWorkflowStore.getState().saveWorkflow();
+    expect(api.updatePipeline).toHaveBeenCalledWith(
+      'parent_1',
+      expect.objectContaining({ metadata: expect.objectContaining({ isSubflow: false }) }),
+    );
+  });
+});

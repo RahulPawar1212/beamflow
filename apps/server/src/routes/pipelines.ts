@@ -235,12 +235,17 @@ export async function pipelineRoutes(
         const nodeIds = workflow.nodes.map(n => n.id);
         await previewCache.invalidatePreviews(req.params.id, nodeIds);
 
-        // Ensure ID consistency
+        // Ensure ID consistency. isSubflow is identity, decided once at creation
+        // (POST) — a plain update must never flip a workflow into a subflow or
+        // vice versa, even if the client sends a different value (e.g. stale
+        // editor state after navigating through a subflow). Always keep the
+        // value already on record.
         const toSave: SerializedWorkflow = {
           ...workflow,
           metadata: {
             ...workflow.metadata,
             id: req.params.id,
+            isSubflow: existing.metadata.isSubflow,
             updatedAt: timestamp(),
           },
         };

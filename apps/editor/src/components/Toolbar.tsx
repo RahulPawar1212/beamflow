@@ -81,6 +81,10 @@ export function Toolbar() {
       addToast('info', 'Add at least one node before generating code');
       return;
     }
+    // Persist through the store's saveWorkflow (it keeps the version token in
+    // sync). A raw updatePipeline here would bump the server version behind the
+    // store's back and make the next save self-409. Save whenever there are
+    // unsaved edits or the pipeline is new.
     if (!pipelineId || isDirty) {
       const ok = await handleSave(true);
       if (!ok) return;
@@ -90,8 +94,6 @@ export function Toolbar() {
 
     setGenerating(true);
     try {
-      await api.updatePipeline(id, toWorkflow());
-      markSaved();
       const result = await api.generateCode(id);
       setGeneratedArtifact({
         code: result.code,
@@ -128,8 +130,8 @@ export function Toolbar() {
     setExecutionStatus('running');
     setExecutionLogs([]);
     try {
-      await api.updatePipeline(id, toWorkflow());
-      markSaved();
+      // Already persisted above via saveWorkflow (keeps the version token in
+      // sync); no raw updatePipeline here — that would self-409 the next save.
       const result = await api.executePipeline(id, { signal: controller.signal });
       const logs = [...result.logs, ...result.errors];
       setExecutionLogs(logs.length ? logs : ['Pipeline finished with no output.']);

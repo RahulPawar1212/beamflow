@@ -198,6 +198,8 @@ interface WorkflowState {
   // Serialization
   toWorkflow: () => SerializedWorkflowDTO;
   saveWorkflow: () => Promise<boolean>;
+  /** Internal: the actual save body. Call saveWorkflow(), which serializes it. */
+  _saveWorkflowInner: () => Promise<boolean>;
   duplicateWorkflow: () => Promise<string | null>;
   loadWorkflow: (workflow: SerializedWorkflowDTO, clearStack?: boolean) => void;
   clearWorkflow: () => void;
@@ -228,6 +230,16 @@ interface WorkflowState {
 }
 
 const MAX_HISTORY = 50;
+
+// A save must never run concurrently with itself. Two overlapping saves would
+// both read the same in-memory `pipelineVersion` (the second before the first's
+// response bumps it), so the second sends a now-stale version and the server
+// 409s it — a false "someone else edited this" conflict even for a solo user.
+// This latch serializes saves: an in-flight save is awaited and its result
+// reused, so a burst of triggers (auto-save + Generate + manual) collapses into
+// one write and the version stays coherent. Module-level (not store state)
+// because it's a runtime concurrency latch, not UI state.
+let inFlightSave: Promise<boolean> | null = null;
 
 export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   // Initial state
@@ -782,6 +794,24 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   // === Serialization =========================================================
 
   saveWorkflow: async (): Promise<boolean> => {
+    // Serialize saves: if one is already running, await it instead of starting a
+    // second that would race on a stale `pipelineVersion` and self-409. The
+    // awaiting caller then re-checks isDirty and saves again if the user edited
+    // during the in-flight save, so no change is lost.
+    if (inFlightSave) {
+      await inFlightSave.catch(() => {});
+      if (!get().isDirty) return true;
+    }
+    const run = get()._saveWorkflowInner();
+    inFlightSave = run;
+    try {
+      return await run;
+    } finally {
+      if (inFlightSave === run) inFlightSave = null;
+    }
+  },
+
+  _saveWorkflowInner: async (): Promise<boolean> => {
     const state = get();
     trace.action('saveWorkflow', { pipelineId: state.pipelineId, isSubflow: state.isSubflow, project: state.currentProjectId });
     state.setSaving(true);

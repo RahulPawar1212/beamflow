@@ -5,7 +5,7 @@
  */
 
 import type { SerializedWorkflow } from '@beamflow/shared';
-import type { IStorage } from './storage.js';
+import type { IStorage, SaveResult } from './storage.js';
 
 /**
  * In-memory {@link IStorage} for route tests — no filesystem, fully isolated
@@ -14,7 +14,7 @@ import type { IStorage } from './storage.js';
  * the caller's org id.
  */
 export class MemoryStorage implements IStorage {
-  private readonly store = new Map<string, { workflow: SerializedWorkflow; orgId?: string }>();
+  private readonly store = new Map<string, { workflow: SerializedWorkflow; orgId?: string; version: number }>();
 
   async list(orgId?: string): Promise<SerializedWorkflow[]> {
     return [...this.store.values()]
@@ -26,14 +26,37 @@ export class MemoryStorage implements IStorage {
     const entry = this.store.get(id);
     if (!entry) return null;
     if (orgId && entry.orgId !== orgId) return null;
-    return entry.workflow;
+    // Reflect the stored version on the returned metadata, like the real DB.
+    return { ...entry.workflow, metadata: { ...entry.workflow.metadata, version: entry.version } };
   }
 
-  async save(workflow: SerializedWorkflow, orgId?: string): Promise<void> {
+  async save(
+    workflow: SerializedWorkflow,
+    orgId?: string,
+    _ownerId?: string,
+    expectedVersion?: number,
+  ): Promise<SaveResult> {
+    const existing = this.store.get(workflow.metadata.id);
+    if (existing) {
+      // Same optimistic-concurrency guard as the real DB: reject a stale base.
+      if (expectedVersion !== undefined && existing.version !== expectedVersion) {
+        return { ok: false, currentVersion: existing.version };
+      }
+      const version = existing.version + 1;
+      this.store.set(workflow.metadata.id, {
+        workflow: structuredClone({ ...workflow, metadata: { ...workflow.metadata, version } }),
+        orgId,
+        version,
+      });
+      return { ok: true, version };
+    }
+    const version = workflow.metadata.version ?? 1;
     this.store.set(workflow.metadata.id, {
       workflow: structuredClone(workflow),
       orgId,
+      version,
     });
+    return { ok: true, version };
   }
 
   async delete(id: string, orgId?: string): Promise<boolean> {

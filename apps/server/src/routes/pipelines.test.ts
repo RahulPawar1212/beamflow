@@ -613,6 +613,88 @@ describe('workflowsRepo identity guarantee (real DrizzleStorage)', () => {
     expect(subflows.json().pipelines.map((p: any) => p.id)).not.toContain(id);
   });
 
+  it('a stale-version PUT is rejected 409 and does NOT overwrite the newer state', async () => {
+    // Create at version 1.
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/pipelines',
+      headers: { Authorization: `Bearer ${token}` },
+      payload: { name: 'Concurrent' },
+    });
+    const id = created.json().metadata.id;
+    const base = created.json() as SerializedWorkflow;
+    expect(base.metadata.version).toBe(1);
+
+    // First save (from the loaded version 1) succeeds and bumps to 2.
+    const firstSave = await app.inject({
+      method: 'PUT',
+      url: `/api/pipelines/${id}`,
+      headers: { Authorization: `Bearer ${token}` },
+      payload: { ...base, metadata: { ...base.metadata, name: 'Saved by first editor' } },
+    });
+    expect(firstSave.statusCode).toBe(200);
+    expect(firstSave.json().metadata.version).toBe(2);
+
+    // Second editor still holds version 1 and tries to save — must be blocked.
+    const staleSave = await app.inject({
+      method: 'PUT',
+      url: `/api/pipelines/${id}`,
+      headers: { Authorization: `Bearer ${token}` },
+      payload: { ...base, metadata: { ...base.metadata, name: 'Saved by STALE editor', version: 1 } },
+    });
+    expect(staleSave.statusCode).toBe(409);
+    expect(staleSave.json().currentVersion).toBe(2);
+
+    // The stale save must NOT have overwritten the first editor's work.
+    const got = await app.inject({
+      method: 'GET',
+      url: `/api/pipelines/${id}`,
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(got.json().metadata.name).toBe('Saved by first editor');
+    expect(got.json().metadata.version).toBe(2);
+  });
+
+  it('a successful PUT writes a version-history snapshot', async () => {
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/pipelines',
+      headers: { Authorization: `Bearer ${token}` },
+      payload: { name: 'Snapshotted' },
+    });
+    const id = created.json().metadata.id;
+    const base = created.json() as SerializedWorkflow;
+
+    await app.inject({
+      method: 'PUT',
+      url: `/api/pipelines/${id}`,
+      headers: { Authorization: `Bearer ${token}` },
+      payload: { ...base, metadata: { ...base.metadata, name: 'Rev A' } },
+    });
+    await app.inject({
+      method: 'PUT',
+      url: `/api/pipelines/${id}`,
+      headers: { Authorization: `Bearer ${token}` },
+      // Re-read the now-current version before the second save.
+      payload: await (async () => {
+        const cur = await app.inject({
+          method: 'GET', url: `/api/pipelines/${id}`, headers: { Authorization: `Bearer ${token}` },
+        });
+        const c = cur.json() as SerializedWorkflow;
+        return { ...c, metadata: { ...c.metadata, name: 'Rev B' } };
+      })(),
+    });
+
+    const versions = await app.inject({
+      method: 'GET',
+      url: `/api/pipelines/${id}/versions`,
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(versions.statusCode).toBe(200);
+    // Two successful saves → two snapshots.
+    expect(versions.json().versions.length).toBe(2);
+  });
+
   it('a real subflow stays a subflow across repeated saves, even if the client sends isSubflow: false', async () => {
     const created = await app.inject({
       method: 'POST',

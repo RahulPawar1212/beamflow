@@ -20,6 +20,7 @@ import type { SerializedWorkflow, PreviewRowsResponse } from '@beamflow/shared';
 import type { IStorage } from '../storage.js';
 import { projectsRepo } from '../db/repositories/projects.repo.js';
 import { workflowsRepo } from '../db/repositories/workflows.repo.js';
+import { versionsRepo } from '../db/repositories/versions.repo.js';
 import { notFound, badRequest, ApiError } from '../errors.js';
 import { getOrgId, getUserId } from '../auth-context.js';
 
@@ -282,8 +283,37 @@ export async function pipelineRoutes(
           },
         };
 
-        await storage.save(toSave, orgId);
-        return reply.send(toSave);
+        // Optimistic concurrency: the client sends the version it loaded. If a
+        // teammate saved in the meantime, reject with 409 + the current server
+        // state instead of clobbering their work. A client that sends no version
+        // (older build) gets the legacy unconditional write. Routed through the
+        // storage abstraction so an injected backend (tests) is honored.
+        const expectedVersion = workflow.metadata.version;
+        const result = await storage.save(toSave, orgId, undefined, expectedVersion);
+        if (!result.ok) {
+          // Hand back the authoritative current state so the editor can show what
+          // changed and offer to reload — without overwriting anything.
+          const current = await storage.get(req.params.id, orgId);
+          return reply.status(409).send({
+            error: 'This pipeline was changed by someone else since you loaded it.',
+            currentVersion: result.currentVersion,
+            current,
+          });
+        }
+
+        // Snapshot the just-saved state into version history (activates the
+        // previously-dormant workflow_versions table). Best-effort: a snapshot
+        // failure must not fail the save itself (and is a no-op for storage
+        // backends that don't persist to the versions DB, e.g. tests).
+        const saved: SerializedWorkflow = {
+          ...toSave,
+          metadata: { ...toSave.metadata, version: result.version },
+        };
+        await versionsRepo.create(req.params.id, saved, null, orgId).catch((err) => {
+          req.log?.warn?.(`version snapshot failed: ${err instanceof Error ? err.message : err}`);
+        });
+
+        return reply.send(saved);
       },
     );
 

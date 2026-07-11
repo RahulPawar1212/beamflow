@@ -94,7 +94,23 @@ export const workflowsRepo = {
     });
   },
 
-  async update(workflow: SerializedWorkflow, orgId: string): Promise<void> {
+  /**
+   * Version-guarded update — the optimistic-concurrency write.
+   *
+   * `expectedVersion` is the version the caller loaded. The write only lands if
+   * the stored row is still at that version; otherwise a teammate saved in the
+   * meantime and we return `{ ok: false, currentVersion }` (the caller turns that
+   * into a 409) WITHOUT clobbering their work. On success the row's version is
+   * bumped by 1 and the new value returned.
+   *
+   * `expectedVersion` undefined skips the guard (unconditional write) — used only
+   * by internal callers that don't participate in concurrency (e.g. legacy saves).
+   */
+  async update(
+    workflow: SerializedWorkflow,
+    orgId: string,
+    expectedVersion?: number,
+  ): Promise<{ ok: true; version: number } | { ok: false; currentVersion: number | null }> {
     const now = workflow.metadata.updatedAt;
 
     // isSubflow is IDENTITY, fixed once at create() and never mutable by an
@@ -104,11 +120,26 @@ export const workflowsRepo = {
     // single choke point for every workflow write, so this is the one place
     // that guarantees identity can't drift (a route-level check alone can be
     // bypassed by a new/changed call site).
-    const existing = await this.get(workflow.metadata.id, orgId);
+    const rows = await db
+      .select()
+      .from(workflowsTable)
+      .where(and(eq(workflowsTable.id, workflow.metadata.id), eq(workflowsTable.orgId, orgId)))
+      .limit(1);
+    const existingRow = rows[0] as any | undefined;
+    const existing: SerializedWorkflow | null = existingRow ? JSON.parse(existingRow.settingsJson) : null;
+    const storedVersion: number | null = existingRow?.version ?? null;
+
+    // Concurrency guard: if the caller loaded an older version than what's stored,
+    // reject rather than overwrite. (storedVersion null → row is gone; also a conflict.)
+    if (expectedVersion !== undefined && storedVersion !== expectedVersion) {
+      return { ok: false, currentVersion: storedVersion };
+    }
+
     const isSubflow = existing ? (existing.metadata.isSubflow ? 1 : 0) : (workflow.metadata.isSubflow ? 1 : 0);
+    const nextVersion = (storedVersion ?? 0) + 1;
     const persistedWorkflow: SerializedWorkflow = {
       ...workflow,
-      metadata: { ...workflow.metadata, isSubflow: !!isSubflow },
+      metadata: { ...workflow.metadata, isSubflow: !!isSubflow, version: nextVersion },
     };
 
     const setValues: Record<string, unknown> = {
@@ -116,6 +147,7 @@ export const workflowsRepo = {
       description: workflow.metadata.description || '',
       settingsJson: JSON.stringify(persistedWorkflow),
       isSubflow,
+      version: nextVersion,
       updatedAt: now,
     };
     // Only touch project_id when the caller supplied one (allows moving a workflow
@@ -123,15 +155,34 @@ export const workflowsRepo = {
     if (workflow.metadata.projectId !== undefined) {
       setValues.projectId = workflow.metadata.projectId;
     }
+
+    // Conditional write: the version predicate makes the check-and-bump atomic —
+    // two concurrent saves at the same base version can't both land, even if they
+    // both passed the read-check above (whoever writes second matches 0 rows).
+    const conditions = [
+      eq(workflowsTable.id, workflow.metadata.id),
+      eq(workflowsTable.orgId, orgId),
+    ];
+    if (expectedVersion !== undefined && storedVersion !== null) {
+      conditions.push(eq(workflowsTable.version, expectedVersion));
+    }
     await db
       .update(workflowsTable as any)
       .set(setValues)
-      .where(
-        and(
-          eq(workflowsTable.id, workflow.metadata.id),
-          eq(workflowsTable.orgId, orgId)
-        )
-      );
+      .where(and(...conditions));
+
+    // Confirm the write landed at the version we intended (guards the race where a
+    // concurrent writer slipped in between the read and this UPDATE).
+    const after = await db
+      .select({ version: workflowsTable.version })
+      .from(workflowsTable)
+      .where(and(eq(workflowsTable.id, workflow.metadata.id), eq(workflowsTable.orgId, orgId)))
+      .limit(1);
+    const landedVersion = (after[0] as any)?.version ?? null;
+    if (expectedVersion !== undefined && landedVersion !== nextVersion) {
+      return { ok: false, currentVersion: landedVersion };
+    }
+    return { ok: true, version: nextVersion };
   },
 
   async delete(id: string, orgId: string): Promise<boolean> {

@@ -12,16 +12,29 @@ import { homedir } from 'node:os';
 import type { SerializedWorkflow } from '@beamflow/shared';
 
 /**
+ * Result of a version-guarded save. `ok:false` means the caller's base version
+ * was stale (a concurrent write landed first) and nothing was overwritten.
+ */
+export type SaveResult =
+  | { ok: true; version: number }
+  | { ok: false; currentVersion: number | null };
+
+/**
  * Storage interface — implement this for different backends.
  *
  * The scope argument (`orgId`) is the ORGANIZATION the caller is acting in —
  * every read/write is filtered by it. `ownerId` on save is the acting user, kept
  * only as provenance on newly created rows (not an access gate).
+ *
+ * `save`'s `expectedVersion` is the optimistic-concurrency token: when provided
+ * for an existing row, the write only lands if the stored version still matches;
+ * otherwise it returns `{ ok:false }` without clobbering. Omitted (or for a brand
+ * new row) → unconditional write.
  */
 export interface IStorage {
   list(orgId?: string, options?: { includeSubflows?: boolean; projectId?: string }): Promise<SerializedWorkflow[]>;
   get(id: string, orgId?: string): Promise<SerializedWorkflow | null>;
-  save(workflow: SerializedWorkflow, orgId?: string, ownerId?: string): Promise<void>;
+  save(workflow: SerializedWorkflow, orgId?: string, ownerId?: string, expectedVersion?: number): Promise<SaveResult>;
   delete(id: string, orgId?: string): Promise<boolean>;
 }
 
@@ -82,10 +95,12 @@ export class LocalJsonStorage implements IStorage {
     }
   }
 
-  async save(workflow: SerializedWorkflow, _userId?: string): Promise<void> {
+  async save(workflow: SerializedWorkflow, _orgId?: string, _ownerId?: string, _expectedVersion?: number): Promise<SaveResult> {
+    // Dev-only local storage: no concurrency model — unconditional write.
     await this.ensureDir();
     const content = JSON.stringify(workflow, null, 2);
     await writeFile(this.filePath(workflow.metadata.id), content, 'utf-8');
+    return { ok: true, version: workflow.metadata.version ?? 1 };
   }
 
   async delete(id: string, _userId?: string): Promise<boolean> {
@@ -115,17 +130,18 @@ export class DrizzleStorage implements IStorage {
     return workflowsRepo.get(id, orgId);
   }
 
-  async save(workflow: SerializedWorkflow, orgId?: string, ownerId?: string): Promise<void> {
+  async save(workflow: SerializedWorkflow, orgId?: string, ownerId?: string, expectedVersion?: number): Promise<SaveResult> {
     if (!orgId) {
       throw new Error('Organization ID is required to save workflow to database');
     }
     const existing = await workflowsRepo.get(workflow.metadata.id, orgId);
     if (existing) {
-      await workflowsRepo.update(workflow, orgId);
-    } else {
-      // ownerId is provenance on the new row; fall back to '' if unknown.
-      await workflowsRepo.create(workflow, orgId, ownerId ?? '');
+      // Version-guarded: returns { ok:false } without overwriting on a stale base.
+      return workflowsRepo.update(workflow, orgId, expectedVersion);
     }
+    // ownerId is provenance on the new row; fall back to '' if unknown.
+    await workflowsRepo.create(workflow, orgId, ownerId ?? '');
+    return { ok: true, version: workflow.metadata.version ?? 1 };
   }
 
   async delete(id: string, orgId?: string): Promise<boolean> {

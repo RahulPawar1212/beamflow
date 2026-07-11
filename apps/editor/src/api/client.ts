@@ -16,6 +16,22 @@ import { trace } from '../lib/trace';
  */
 const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? '/api';
 
+/**
+ * Thrown on a 409 from a version-guarded save: a teammate saved the pipeline
+ * after we loaded it. Carries the server's authoritative current state so the
+ * UI can show what changed and offer to reload.
+ */
+export class ConflictError extends Error {
+  readonly currentVersion: number | null;
+  readonly current: SerializedWorkflowDTO | null;
+  constructor(message: string, currentVersion: number | null, current: SerializedWorkflowDTO | null) {
+    super(message);
+    this.name = 'ConflictError';
+    this.currentVersion = currentVersion;
+    this.current = current;
+  }
+}
+
 async function request<T>(
   path: string,
   options?: RequestInit,
@@ -51,6 +67,14 @@ async function request<T>(
       }
     }
     const body = await res.json().catch(() => ({}));
+    if (res.status === 409) {
+      const b = body as { error?: string; currentVersion?: number | null; current?: SerializedWorkflowDTO | null };
+      throw new ConflictError(
+        b.error || 'This pipeline was changed by someone else.',
+        b.currentVersion ?? null,
+        b.current ?? null,
+      );
+    }
     throw new Error((body as Record<string, string>).error || `Request failed: ${res.status}`);
   }
   
@@ -376,6 +400,9 @@ export interface SerializedWorkflowDTO {
     description?: string;
     isSubflow?: boolean;
     projectId?: string;
+    orgId?: string;
+    /** Optimistic-concurrency token: the version this document was loaded at. */
+    version?: number;
     createdAt: string;
     updatedAt: string;
     parameters?: any[];

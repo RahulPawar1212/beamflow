@@ -23,7 +23,7 @@ import {
   isCustomType,
   CUSTOM_NODE_PREFIX,
 } from '../customNodes';
-import { api } from '../api/client';
+import { api, ConflictError } from '../api/client';
 import { useSchemaStore } from '../lib/schema-store';
 import { trace } from '../lib/trace';
 
@@ -75,6 +75,18 @@ interface WorkflowState {
   pipelineName: string;
   isSubflow: boolean;
   pipelineParameters: Array<{ id: string; name: string; type: string; targetNodeId: string; targetSettingKey: string; }>;
+  // Optimistic-concurrency token: the version this document was loaded at. Sent
+  // on save so the server can 409 if a teammate saved first. Bumped from the
+  // server's response on a successful save. undefined for never-saved docs.
+  pipelineVersion: number | undefined;
+  // Set when a save was rejected as a conflict (a teammate saved first). Holds
+  // the server's authoritative current state; the Toolbar renders a banner from
+  // it and clears it on reload/dismiss. null when there's no pending conflict.
+  conflict: { currentVersion: number | null; current: SerializedWorkflowDTO | null } | null;
+  // Timestamps of the loaded record, preserved so toWorkflow() reflects the real
+  // record instead of regenerating fresh timestamps on every serialization.
+  pipelineCreatedAt: string | undefined;
+  pipelineUpdatedAt: string | undefined;
 
   // Active project — new pipelines/subflows are created inside it, and the
   // Workflows list is scoped to it.
@@ -186,6 +198,12 @@ interface WorkflowState {
   loadWorkflow: (workflow: SerializedWorkflowDTO, clearStack?: boolean) => void;
   clearWorkflow: () => void;
 
+  // Conflict resolution (a save was 409'd by a concurrent edit)
+  /** Discard local edits and load the server's current version into the canvas. */
+  reloadFromConflict: () => void;
+  /** Dismiss the conflict banner, keeping local edits (user will re-save/merge). */
+  dismissConflict: () => void;
+
   // Projects
   setCurrentProject: (id: string | null, name: string) => void;
 
@@ -213,6 +231,10 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   pipelineName: 'Untitled Pipeline',
   isSubflow: false,
   pipelineParameters: [],
+  pipelineVersion: undefined,
+  pipelineCreatedAt: undefined,
+  pipelineUpdatedAt: undefined,
+  conflict: null,
   currentProjectId: null,
   currentProjectName: '',
   nodes: [],
@@ -759,7 +781,14 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     try {
       const workflow = state.toWorkflow();
       if (state.pipelineId) {
-        await api.updatePipeline(state.pipelineId, workflow);
+        const saved = await api.updatePipeline(state.pipelineId, workflow);
+        // Advance our concurrency token + timestamps to what the server persisted,
+        // so the next save builds on this version instead of re-sending the old one.
+        set({
+          pipelineVersion: saved.metadata.version,
+          pipelineCreatedAt: saved.metadata.createdAt,
+          pipelineUpdatedAt: saved.metadata.updatedAt,
+        });
       } else {
         const created = await api.createPipeline({
           name: state.pipelineName,
@@ -769,11 +798,24 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
           nodes: workflow.nodes,
           connections: workflow.connections,
         });
-        set({ pipelineId: created.metadata.id });
+        set({
+          pipelineId: created.metadata.id,
+          pipelineVersion: created.metadata.version,
+          pipelineCreatedAt: created.metadata.createdAt,
+          pipelineUpdatedAt: created.metadata.updatedAt,
+        });
       }
       state.markSaved();
       return true;
     } catch (err) {
+      // Conflict: a teammate saved after we loaded. Do NOT clobber — keep the
+      // user's in-memory edits and surface the conflict so they can reload/merge.
+      // (Phase 4 renders a richer banner; the store just flags it here.)
+      if (err instanceof ConflictError) {
+        set({ conflict: { currentVersion: err.currentVersion, current: err.current } });
+        state.addToast('error', 'Save blocked: this pipeline was changed by someone else. Reload to see their changes.');
+        return false;
+      }
       console.error('Failed to save workflow:', err);
       state.addToast('error', `Failed to save: ${err instanceof Error ? err.message : String(err)}`);
       state.setSaving(false);
@@ -842,10 +884,16 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       metadata: {
         id: state.pipelineId || `pipeline_${nanoid(8)}`,
         name: state.pipelineName,
-        createdAt: now,
-        updatedAt: now,
+        // Timestamps reflect the loaded record; the server owns updatedAt on write.
+        // Falling back to `now` only for a never-saved doc keeps them truthful
+        // instead of regenerating on every serialization.
+        createdAt: state.pipelineCreatedAt ?? now,
+        updatedAt: state.pipelineUpdatedAt ?? now,
         isSubflow: state.isSubflow,
         parameters: state.pipelineParameters,
+        // The concurrency token: the version this doc was loaded at. The server
+        // 409s if the stored version has moved on. undefined for a new doc.
+        version: state.pipelineVersion,
       },
       nodes: state.nodes.map((n) => {
         const base = {
@@ -912,6 +960,11 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       pipelineName: workflow.metadata.name,
       isSubflow: workflow.metadata.isSubflow || false,
       pipelineParameters: workflow.metadata.parameters || [],
+      // Capture the loaded record's concurrency token + real timestamps so the
+      // next save sends the version we're building on (see toWorkflow).
+      pipelineVersion: workflow.metadata.version,
+      pipelineCreatedAt: workflow.metadata.createdAt,
+      pipelineUpdatedAt: workflow.metadata.updatedAt,
       nodes,
       edges,
       selectedNodeId: null,
@@ -970,6 +1023,10 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       pipelineName: 'Untitled Pipeline',
       isSubflow: false,
       pipelineParameters: [],
+      pipelineVersion: undefined,
+      pipelineCreatedAt: undefined,
+      pipelineUpdatedAt: undefined,
+      conflict: null,
       navigationStack: [],
       nodes: [],
       edges: [],
@@ -986,6 +1043,22 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     // Schema propagation: clear all schema state
     useSchemaStore.getState().clearSchemas();
   },
+
+  reloadFromConflict: () => {
+    const { conflict } = get();
+    if (!conflict?.current) {
+      // No captured state (rare) — just clear the flag; user can reopen the pipeline.
+      set({ conflict: null });
+      return;
+    }
+    // Load the server's authoritative version, discarding local edits. loadWorkflow
+    // resets version/timestamps and isDirty, so the next save builds on the fresh base.
+    get().loadWorkflow(conflict.current);
+    set({ conflict: null });
+    get().addToast('info', 'Reloaded the latest version from the server.');
+  },
+
+  dismissConflict: () => set({ conflict: null }),
 
   setCurrentProject: (id, name) => set({ currentProjectId: id, currentProjectName: name }),
 

@@ -11,12 +11,18 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import type { SerializedWorkflow } from '@beamflow/shared';
 
-/** Storage interface — implement this for different backends. */
+/**
+ * Storage interface — implement this for different backends.
+ *
+ * The scope argument (`orgId`) is the ORGANIZATION the caller is acting in —
+ * every read/write is filtered by it. `ownerId` on save is the acting user, kept
+ * only as provenance on newly created rows (not an access gate).
+ */
 export interface IStorage {
-  list(userId?: string, options?: { includeSubflows?: boolean; projectId?: string }): Promise<SerializedWorkflow[]>;
-  get(id: string, userId?: string): Promise<SerializedWorkflow | null>;
-  save(workflow: SerializedWorkflow, userId?: string): Promise<void>;
-  delete(id: string, userId?: string): Promise<boolean>;
+  list(orgId?: string, options?: { includeSubflows?: boolean; projectId?: string }): Promise<SerializedWorkflow[]>;
+  get(id: string, orgId?: string): Promise<SerializedWorkflow | null>;
+  save(workflow: SerializedWorkflow, orgId?: string, ownerId?: string): Promise<void>;
+  delete(id: string, orgId?: string): Promise<boolean>;
 }
 
 /**
@@ -99,31 +105,32 @@ import { workflowsRepo } from './db/repositories/workflows.repo.js';
  * LibSQL/PostgreSQL database storage.
  */
 export class DrizzleStorage implements IStorage {
-  async list(userId?: string, options?: { includeSubflows?: boolean; projectId?: string }): Promise<SerializedWorkflow[]> {
-    if (!userId) return [];
-    return workflowsRepo.list(userId, options);
+  async list(orgId?: string, options?: { includeSubflows?: boolean; projectId?: string }): Promise<SerializedWorkflow[]> {
+    if (!orgId) return [];
+    return workflowsRepo.list(orgId, options);
   }
 
-  async get(id: string, userId?: string): Promise<SerializedWorkflow | null> {
-    if (!userId) return null;
-    return workflowsRepo.get(id, userId);
+  async get(id: string, orgId?: string): Promise<SerializedWorkflow | null> {
+    if (!orgId) return null;
+    return workflowsRepo.get(id, orgId);
   }
 
-  async save(workflow: SerializedWorkflow, userId?: string): Promise<void> {
-    if (!userId) {
-      throw new Error('User ID is required to save workflow to database');
+  async save(workflow: SerializedWorkflow, orgId?: string, ownerId?: string): Promise<void> {
+    if (!orgId) {
+      throw new Error('Organization ID is required to save workflow to database');
     }
-    const existing = await workflowsRepo.get(workflow.metadata.id, userId);
+    const existing = await workflowsRepo.get(workflow.metadata.id, orgId);
     if (existing) {
-      await workflowsRepo.update(workflow, userId);
+      await workflowsRepo.update(workflow, orgId);
     } else {
-      await workflowsRepo.create(workflow, userId);
+      // ownerId is provenance on the new row; fall back to '' if unknown.
+      await workflowsRepo.create(workflow, orgId, ownerId ?? '');
     }
   }
 
-  async delete(id: string, userId?: string): Promise<boolean> {
-    if (!userId) return false;
-    return workflowsRepo.delete(id, userId);
+  async delete(id: string, orgId?: string): Promise<boolean> {
+    if (!orgId) return false;
+    return workflowsRepo.delete(id, orgId);
   }
 }
 

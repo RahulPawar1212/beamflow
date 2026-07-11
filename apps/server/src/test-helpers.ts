@@ -10,35 +10,36 @@ import type { IStorage } from './storage.js';
 /**
  * In-memory {@link IStorage} for route tests — no filesystem, fully isolated
  * per instance. Mirrors {@link LocalJsonStorage} semantics (get → null when
- * absent, delete → boolean, save overwrites by `metadata.id`).
+ * absent, delete → boolean, save overwrites by `metadata.id`). The scope key is
+ * the caller's org id.
  */
 export class MemoryStorage implements IStorage {
-  private readonly store = new Map<string, { workflow: SerializedWorkflow; userId?: string }>();
+  private readonly store = new Map<string, { workflow: SerializedWorkflow; orgId?: string }>();
 
-  async list(userId?: string): Promise<SerializedWorkflow[]> {
+  async list(orgId?: string): Promise<SerializedWorkflow[]> {
     return [...this.store.values()]
-      .filter((entry) => !userId || entry.userId === userId)
+      .filter((entry) => !orgId || entry.orgId === orgId)
       .map((entry) => entry.workflow);
   }
 
-  async get(id: string, userId?: string): Promise<SerializedWorkflow | null> {
+  async get(id: string, orgId?: string): Promise<SerializedWorkflow | null> {
     const entry = this.store.get(id);
     if (!entry) return null;
-    if (userId && entry.userId !== userId) return null;
+    if (orgId && entry.orgId !== orgId) return null;
     return entry.workflow;
   }
 
-  async save(workflow: SerializedWorkflow, userId?: string): Promise<void> {
+  async save(workflow: SerializedWorkflow, orgId?: string): Promise<void> {
     this.store.set(workflow.metadata.id, {
       workflow: structuredClone(workflow),
-      userId,
+      orgId,
     });
   }
 
-  async delete(id: string, userId?: string): Promise<boolean> {
+  async delete(id: string, orgId?: string): Promise<boolean> {
     const entry = this.store.get(id);
     if (!entry) return false;
-    if (userId && entry.userId !== userId) return false;
+    if (orgId && entry.orgId !== orgId) return false;
     return this.store.delete(id);
   }
 }

@@ -15,11 +15,11 @@ export interface PipelineVariable {
 }
 
 export const variablesRepo = {
-  async list(workflowId: string, ownerId: string): Promise<PipelineVariable[]> {
+  async list(workflowId: string, orgId: string): Promise<PipelineVariable[]> {
     const workflows = await db
       .select({ id: workflowsTable.id })
       .from(workflowsTable)
-      .where(and(eq(workflowsTable.id, workflowId), eq(workflowsTable.ownerId, ownerId)))
+      .where(and(eq(workflowsTable.id, workflowId), eq(workflowsTable.orgId, orgId)))
       .limit(1);
     
     if (workflows.length === 0) return [];
@@ -39,11 +39,11 @@ export const variablesRepo = {
     }));
   },
 
-  async set(variable: Omit<PipelineVariable, 'id'> & { id?: string }, ownerId: string): Promise<void> {
+  async set(variable: Omit<PipelineVariable, 'id'> & { id?: string }, orgId: string): Promise<void> {
     const workflows = await db
       .select({ id: workflowsTable.id })
       .from(workflowsTable)
-      .where(and(eq(workflowsTable.id, variable.workflowId), eq(workflowsTable.ownerId, ownerId)))
+      .where(and(eq(workflowsTable.id, variable.workflowId), eq(workflowsTable.orgId, orgId)))
       .limit(1);
     
     if (workflows.length === 0) {
@@ -85,11 +85,11 @@ export const variablesRepo = {
     }
   },
 
-  async delete(workflowId: string, environment: string, name: string, ownerId: string): Promise<boolean> {
+  async delete(workflowId: string, environment: string, name: string, orgId: string): Promise<boolean> {
     const workflows = await db
       .select({ id: workflowsTable.id })
       .from(workflowsTable)
-      .where(and(eq(workflowsTable.id, workflowId), eq(workflowsTable.ownerId, ownerId)))
+      .where(and(eq(workflowsTable.id, workflowId), eq(workflowsTable.orgId, orgId)))
       .limit(1);
     
     if (workflows.length === 0) return false;

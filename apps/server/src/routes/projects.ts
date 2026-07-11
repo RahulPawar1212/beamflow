@@ -1,31 +1,31 @@
 import type { FastifyInstance } from 'fastify';
 import { projectsRepo } from '../db/repositories/projects.repo.js';
 import { badRequest, notFound } from '../errors.js';
+import { getOrgId, getUserId } from '../auth-context.js';
 
 export async function projectRoutes(app: FastifyInstance): Promise<void> {
   // Wrap in a plugin instance that enforces authentication
   app.register(async (appWithAuth) => {
     appWithAuth.addHook('preHandler', app.authenticate);
 
-    /** GET /api/projects — List the user's projects. */
+    /** GET /api/projects — List the org's projects. */
     appWithAuth.get('/api/projects', async (req, reply) => {
-      const userId = (req.user as any).id;
-      const projects = await projectsRepo.list(userId);
+      const projects = await projectsRepo.list(getOrgId(req));
       return reply.send({ projects });
     });
 
-    /** POST /api/projects — Create a project. */
+    /** POST /api/projects — Create a project in the caller's org. */
     appWithAuth.post<{ Body: { name?: string; description?: string } }>(
       '/api/projects',
       async (req, reply) => {
-        const userId = (req.user as any).id;
         const name = req.body?.name?.trim();
         if (!name) {
           throw badRequest('Project name is required.');
         }
         const project = await projectsRepo.create(
           { name, description: req.body?.description },
-          userId,
+          getOrgId(req),
+          getUserId(req),
         );
         return reply.status(201).send(project);
       },
@@ -35,8 +35,7 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
     appWithAuth.put<{ Params: { id: string }; Body: { name?: string; description?: string } }>(
       '/api/projects/:id',
       async (req, reply) => {
-        const userId = (req.user as any).id;
-        const updated = await projectsRepo.update(req.params.id, userId, {
+        const updated = await projectsRepo.update(req.params.id, getOrgId(req), {
           name: req.body?.name?.trim(),
           description: req.body?.description,
         });
@@ -51,8 +50,7 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
     appWithAuth.delete<{ Params: { id: string } }>(
       '/api/projects/:id',
       async (req, reply) => {
-        const userId = (req.user as any).id;
-        const deleted = await projectsRepo.delete(req.params.id, userId);
+        const deleted = await projectsRepo.delete(req.params.id, getOrgId(req));
         if (!deleted) {
           throw notFound('Project not found or unauthorized.');
         }

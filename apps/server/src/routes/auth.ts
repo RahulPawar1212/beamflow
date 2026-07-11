@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import bcrypt from 'bcryptjs';
 import { nanoid } from 'nanoid';
 import { usersRepo } from '../db/repositories/users.repo.js';
+import { orgsRepo, ensureDefaultOrg } from '../db/repositories/orgs.repo.js';
 import { ApiError, badRequest } from '../errors.js';
 
 export async function authRoutes(app: FastifyInstance): Promise<void> {
@@ -39,8 +40,15 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
 
       await usersRepo.create(user);
 
-      // Generate JWT
-      const token = app.jwt.sign({ id: user.id, email: user.email, name: user.name });
+      // Auto-join the shared Default Organization. ensureDefaultOrg is idempotent
+      // and guarantees the org exists (creating it if this is the very first user);
+      // it also adds every existing user, so the new user gets a membership too.
+      await ensureDefaultOrg();
+      const membership = await orgsRepo.membershipForUser(user.id);
+      const orgId = membership?.orgId;
+
+      // Generate JWT — carries the active org so every request is org-scoped.
+      const token = app.jwt.sign({ id: user.id, email: user.email, name: user.name, orgId });
 
       return reply.status(201).send({
         token,
@@ -73,8 +81,17 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         throw new ApiError(401, 'Invalid email or password.');
       }
 
-      // Generate JWT
-      const token = app.jwt.sign({ id: user.id, email: user.email, name: user.name });
+      // Resolve the user's active org. Older accounts created before the org
+      // model may lack a membership — ensureDefaultOrg backfills one.
+      let membership = await orgsRepo.membershipForUser(user.id);
+      if (!membership) {
+        await ensureDefaultOrg();
+        membership = await orgsRepo.membershipForUser(user.id);
+      }
+      const orgId = membership?.orgId;
+
+      // Generate JWT — carries the active org so every request is org-scoped.
+      const token = app.jwt.sign({ id: user.id, email: user.email, name: user.name, orgId });
 
       return reply.send({
         token,

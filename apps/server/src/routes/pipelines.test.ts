@@ -645,3 +645,121 @@ describe('workflowsRepo identity guarantee (real DrizzleStorage)', () => {
     expect(got.json().metadata.isSubflow).toBe(true);
   });
 });
+
+// Org-scoped access: members of the same organization share its workflows and
+// projects. Uses real DrizzleStorage so the default-org backfill + membership
+// auto-join run for real. Two users registered against the same app instance
+// land in the one Default Organization.
+describe('org-scoped shared access (real DrizzleStorage)', () => {
+  let app: FastifyInstance;
+  let tokenA: string;
+  let tokenB: string;
+
+  beforeEach(async () => {
+    ({ app } = await buildApp({}));
+    await app.ready();
+
+    const reg = async (tag: string) => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/auth/register',
+        payload: {
+          email: `org_${tag}_${Math.random().toString(36).substring(2, 8)}@example.com`,
+          password: 'password123',
+          name: `User ${tag}`,
+        },
+      });
+      return res.json().token as string;
+    };
+    tokenA = await reg('a');
+    tokenB = await reg('b');
+  });
+
+  afterEach(async () => {
+    await app.close();
+  });
+
+  it('user B sees a workflow user A created in their shared org', async () => {
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/pipelines',
+      headers: { Authorization: `Bearer ${tokenA}` },
+      payload: { name: "A's Workflow" },
+    });
+    expect(created.statusCode).toBe(201);
+    const id = created.json().metadata.id;
+
+    // B can GET it directly...
+    const gotByB = await app.inject({
+      method: 'GET',
+      url: `/api/pipelines/${id}`,
+      headers: { Authorization: `Bearer ${tokenB}` },
+    });
+    expect(gotByB.statusCode).toBe(200);
+    expect(gotByB.json().metadata.name).toBe("A's Workflow");
+
+    // ...and it shows up in B's list (both users share the org).
+    const listByB = await app.inject({
+      method: 'GET',
+      url: '/api/pipelines',
+      headers: { Authorization: `Bearer ${tokenB}` },
+    });
+    expect(listByB.json().pipelines.map((p: any) => p.id)).toContain(id);
+  });
+
+  it('user B can edit and delete a workflow user A created (shared, not owner-gated)', async () => {
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/pipelines',
+      headers: { Authorization: `Bearer ${tokenA}` },
+      payload: { name: 'Shared' },
+    });
+    const id = created.json().metadata.id;
+    const workflow = created.json() as SerializedWorkflow;
+
+    const edited = await app.inject({
+      method: 'PUT',
+      url: `/api/pipelines/${id}`,
+      headers: { Authorization: `Bearer ${tokenB}` },
+      payload: { ...workflow, metadata: { ...workflow.metadata, name: 'Edited by B' } },
+    });
+    expect(edited.statusCode).toBe(200);
+    expect(edited.json().metadata.name).toBe('Edited by B');
+
+    const del = await app.inject({
+      method: 'DELETE',
+      url: `/api/pipelines/${id}`,
+      headers: { Authorization: `Bearer ${tokenB}` },
+    });
+    expect(del.statusCode).toBe(204);
+  });
+
+  it('projects are shared across the org too', async () => {
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/projects',
+      headers: { Authorization: `Bearer ${tokenA}` },
+      payload: { name: 'Shared Project' },
+    });
+    expect(created.statusCode).toBe(201);
+    const projectId = created.json().id;
+
+    const listByB = await app.inject({
+      method: 'GET',
+      url: '/api/projects',
+      headers: { Authorization: `Bearer ${tokenB}` },
+    });
+    expect(listByB.json().projects.map((p: any) => p.id)).toContain(projectId);
+  });
+
+  it('a token with no orgId is rejected (401) — stale pre-org session', async () => {
+    // Mint a token missing orgId, exactly like a session from before the org model.
+    const staleToken = (app as any).jwt.sign({ id: 'usr_stale', email: 's@x.com', name: 'Stale' });
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/pipelines',
+      headers: { Authorization: `Bearer ${staleToken}` },
+    });
+    expect(res.statusCode).toBe(401);
+  });
+});

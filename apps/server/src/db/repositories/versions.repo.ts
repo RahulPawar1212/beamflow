@@ -16,11 +16,11 @@ export interface WorkflowVersion {
 }
 
 export const versionsRepo = {
-  async list(workflowId: string, ownerId: string): Promise<Omit<WorkflowVersion, 'snapshot'>[]> {
+  async list(workflowId: string, orgId: string): Promise<Omit<WorkflowVersion, 'snapshot'>[]> {
     const workflows = await db
       .select({ id: workflowsTable.id })
       .from(workflowsTable)
-      .where(and(eq(workflowsTable.id, workflowId), eq(workflowsTable.ownerId, ownerId)))
+      .where(and(eq(workflowsTable.id, workflowId), eq(workflowsTable.orgId, orgId)))
       .limit(1);
     
     if (workflows.length === 0) return [];
@@ -40,11 +40,11 @@ export const versionsRepo = {
     return results;
   },
 
-  async get(id: string, workflowId: string, ownerId: string): Promise<WorkflowVersion | null> {
+  async get(id: string, workflowId: string, orgId: string): Promise<WorkflowVersion | null> {
     const workflows = await db
       .select({ id: workflowsTable.id })
       .from(workflowsTable)
-      .where(and(eq(workflowsTable.id, workflowId), eq(workflowsTable.ownerId, ownerId)))
+      .where(and(eq(workflowsTable.id, workflowId), eq(workflowsTable.orgId, orgId)))
       .limit(1);
     
     if (workflows.length === 0) return null;
@@ -67,11 +67,11 @@ export const versionsRepo = {
     };
   },
 
-  async create(workflowId: string, snapshot: SerializedWorkflow, label: string | null, ownerId: string): Promise<WorkflowVersion> {
+  async create(workflowId: string, snapshot: SerializedWorkflow, label: string | null, orgId: string): Promise<WorkflowVersion> {
     const workflows = await db
       .select({ id: workflowsTable.id })
       .from(workflowsTable)
-      .where(and(eq(workflowsTable.id, workflowId), eq(workflowsTable.ownerId, ownerId)))
+      .where(and(eq(workflowsTable.id, workflowId), eq(workflowsTable.orgId, orgId)))
       .limit(1);
     
     if (workflows.length === 0) {

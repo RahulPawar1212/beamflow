@@ -21,6 +21,7 @@ import type { IStorage } from '../storage.js';
 import { projectsRepo } from '../db/repositories/projects.repo.js';
 import { workflowsRepo } from '../db/repositories/workflows.repo.js';
 import { notFound, badRequest, ApiError } from '../errors.js';
+import { getOrgId, getUserId } from '../auth-context.js';
 
 /**
  * Parse raw database driver errors into user-friendly messages.
@@ -127,13 +128,13 @@ export async function pipelineRoutes(
      *  ?subflowsOnly=true → the user-global subflow library (with usedByCount).
      *  ?projectId=… scopes regular workflows; ?includeSubflows mixes subflows in. */
     appWithAuth.get<{ Querystring: { includeSubflows?: string; projectId?: string; subflowsOnly?: string } }>('/api/pipelines', async (req, reply) => {
-      const userId = (req.user as any).id;
+      const orgId = getOrgId(req);
       const subflowsOnly = req.query.subflowsOnly === 'true';
 
       if (subflowsOnly) {
-        // The shared library: all the user's subflows, each with how many
+        // The shared library: all the org's subflows, each with how many
         // workflows reference it (for the picker's "used by N" + delete guard).
-        const subflows = await workflowsRepo.listSubflows(userId);
+        const subflows = await workflowsRepo.listSubflows(orgId);
         const summaries = await Promise.all(subflows.map(async (w) => ({
           id: w.metadata.id,
           name: w.metadata.name,
@@ -144,14 +145,14 @@ export async function pipelineRoutes(
           updatedAt: w.metadata.updatedAt,
           nodeCount: w.nodes.length,
           connectionCount: w.connections.length,
-          usedByCount: (await workflowsRepo.countReferences(userId, w.metadata.id)).count,
+          usedByCount: (await workflowsRepo.countReferences(orgId, w.metadata.id)).count,
         })));
         return reply.send({ pipelines: summaries });
       }
 
       const includeSubflows = req.query.includeSubflows === 'true';
       const projectId = req.query.projectId || undefined;
-      const workflows = await storage.list(userId, { includeSubflows, projectId });
+      const workflows = await storage.list(orgId, { includeSubflows, projectId });
       const summaries = workflows.map((w) => ({
         id: w.metadata.id,
         name: w.metadata.name,
@@ -170,8 +171,7 @@ export async function pipelineRoutes(
     appWithAuth.get<{ Params: { id: string } }>(
       '/api/pipelines/:id',
       async (req, reply) => {
-        const userId = (req.user as any).id;
-        const workflow = await storage.get(req.params.id, userId);
+        const workflow = await storage.get(req.params.id, getOrgId(req));
         if (!workflow) {
           throw notFound('Pipeline not found or unauthorized.');
         }
@@ -183,7 +183,8 @@ export async function pipelineRoutes(
     appWithAuth.post<{ Body: { name?: string; description?: string; isSubflow?: boolean; parameters?: any[]; projectId?: string; nodes?: any[]; connections?: any[] } }>(
       '/api/pipelines',
       async (req, reply) => {
-        const userId = (req.user as any).id;
+        const orgId = getOrgId(req);
+        const userId = getUserId(req);
         const id = generateId('pipeline');
         const now = timestamp();
         const isSubflow = (req.body as Record<string, any>)?.isSubflow || false;
@@ -211,14 +212,15 @@ export async function pipelineRoutes(
           }
         }
 
-        // Subflows are a USER-GLOBAL shared library — reusable across all projects —
-        // so they are NOT tied to a project (projectId stays null). Regular
-        // workflows are scoped to the requested project, or the user's default.
+        // Subflows are a shared library — reusable across projects — so they are
+        // NOT tied to a project (projectId stays null). Regular workflows are
+        // scoped to the requested project, or the org's default.
+        // (Phase 5 revisits making subflows project-scoped.)
         let projectId: string | undefined;
         if (!isSubflow) {
           projectId = (req.body as Record<string, any>)?.projectId as string | undefined;
           if (!projectId) {
-            projectId = (await projectsRepo.ensureDefaultProject(userId)).id;
+            projectId = (await projectsRepo.ensureDefaultProject(orgId, userId)).id;
           }
         }
 
@@ -231,6 +233,8 @@ export async function pipelineRoutes(
             isSubflow,
             parameters: (req.body as Record<string, any>)?.parameters || [],
             projectId,
+            orgId,
+            version: 1,
             createdAt: now,
             updatedAt: now,
           },
@@ -238,7 +242,7 @@ export async function pipelineRoutes(
           connections: (req.body as Record<string, any>)?.connections || [],
         };
 
-        await storage.save(workflow, userId);
+        await storage.save(workflow, orgId, userId);
         return reply.status(201).send(workflow);
       },
     );
@@ -247,8 +251,8 @@ export async function pipelineRoutes(
     appWithAuth.put<{ Params: { id: string }; Body: SerializedWorkflow }>(
       '/api/pipelines/:id',
       async (req, reply) => {
-        const userId = (req.user as any).id;
-        const existing = await storage.get(req.params.id, userId);
+        const orgId = getOrgId(req);
+        const existing = await storage.get(req.params.id, orgId);
         if (!existing) {
           throw notFound('Pipeline not found or unauthorized.');
         }
@@ -265,17 +269,20 @@ export async function pipelineRoutes(
         // value already on record. (workflowsRepo.update is the authoritative
         // enforcement point since it's the single choke point for every write;
         // this mirrors it here too so the response body reflects reality.)
+        // orgId is likewise pinned to the stored record — access scope is never
+        // reassigned by a save.
         const toSave: SerializedWorkflow = {
           ...workflow,
           metadata: {
             ...workflow.metadata,
             id: req.params.id,
             isSubflow: existing.metadata.isSubflow,
+            orgId: existing.metadata.orgId,
             updatedAt: timestamp(),
           },
         };
 
-        await storage.save(toSave, userId);
+        await storage.save(toSave, orgId);
         return reply.send(toSave);
       },
     );
@@ -284,8 +291,7 @@ export async function pipelineRoutes(
     appWithAuth.delete<{ Params: { id: string } }>(
       '/api/pipelines/:id',
       async (req, reply) => {
-        const userId = (req.user as any).id;
-        const deleted = await storage.delete(req.params.id, userId);
+        const deleted = await storage.delete(req.params.id, getOrgId(req));
         if (!deleted) {
           throw notFound('Pipeline not found or unauthorized.');
         }
@@ -298,8 +304,7 @@ export async function pipelineRoutes(
     appWithAuth.get<{ Params: { id: string } }>(
       '/api/pipelines/:id/references',
       async (req, reply) => {
-        const userId = (req.user as any).id;
-        const { count, names } = await workflowsRepo.countReferences(userId, req.params.id);
+        const { count, names } = await workflowsRepo.countReferences(getOrgId(req), req.params.id);
         return reply.send({ count, names });
       },
     );
@@ -310,8 +315,8 @@ export async function pipelineRoutes(
     appWithAuth.post<{ Params: { id: string; nodeId: string } }>(
       '/api/pipelines/:id/nodes/:nodeId/preview',
       async (req, reply) => {
-        const userId = (req.user as any).id;
-        const workflow = await storage.get(req.params.id, userId);
+        const orgId = getOrgId(req);
+        const workflow = await storage.get(req.params.id, orgId);
         if (!workflow) {
           throw notFound('Pipeline not found or unauthorized.');
         }
@@ -319,7 +324,7 @@ export async function pipelineRoutes(
         // Fire and forget — run in background. If subflow expansion fails (e.g. a
         // referenced subflow was deleted), record it as a failed preview so the
         // panel shows the clear, node-named message instead of hanging.
-        flattenSubflowsForPreview(workflow, userId).then(expandedWorkflow => {
+        flattenSubflowsForPreview(workflow, orgId).then(expandedWorkflow => {
           previewManager.triggerPreview(expandedWorkflow, req.params.nodeId, 1000).catch(console.error);
         }).catch((err) => {
           const message = err instanceof Error ? err.message : String(err);
@@ -345,9 +350,8 @@ export async function pipelineRoutes(
     appWithAuth.get<{ Params: { id: string; nodeId: string }, Querystring: { page?: string, pageSize?: string } }>(
       '/api/pipelines/:id/nodes/:nodeId/preview',
       async (req, reply) => {
-        const userId = (req.user as any).id;
         // Basic auth check
-        const workflow = await storage.get(req.params.id, userId);
+        const workflow = await storage.get(req.params.id, getOrgId(req));
         if (!workflow) {
           throw notFound('Pipeline not found or unauthorized.');
         }
@@ -377,7 +381,7 @@ export async function pipelineRoutes(
      */
     async function flattenSubflowsForPreview(
       workflow: SerializedWorkflow,
-      userId: string,
+      orgId: string,
       depth = 0
     ): Promise<SerializedWorkflow> {
       if (depth > 10) throw new Error('Max subflow nesting depth exceeded (circular dependency?).');
@@ -411,7 +415,7 @@ export async function pipelineRoutes(
           );
         }
 
-        const subflowWf = await storage.get(subflowId as string, userId);
+        const subflowWf = await storage.get(subflowId as string, orgId);
         if (!subflowWf) {
           // The referenced subflow was deleted (or isn't accessible). Surface a
           // clear, node-named validation error (400) instead of a bare 500 —
@@ -423,7 +427,7 @@ export async function pipelineRoutes(
           );
         }
 
-        const fullyExpandedSubflow = await flattenSubflowsForPreview(subflowWf, userId, depth + 1);
+        const fullyExpandedSubflow = await flattenSubflowsForPreview(subflowWf, orgId, depth + 1);
 
         const prefix = `sub_${subflowNode.id}_`;
         const mappedNodes = fullyExpandedSubflow.nodes.map(n => {
@@ -552,7 +556,7 @@ export async function pipelineRoutes(
      */
     async function resolveSubflowTree(
       workflow: SerializedWorkflow,
-      userId: string,
+      orgId: string,
       depth = 0,
       seen: Map<string, SerializedWorkflow> = new Map(),
     ): Promise<Map<string, SerializedWorkflow>> {
@@ -574,7 +578,7 @@ export async function pipelineRoutes(
 
         if (seen.has(subflowId)) continue; // already resolved (dedup repeated references)
 
-        const subflowWf = await storage.get(subflowId, userId);
+        const subflowWf = await storage.get(subflowId, orgId);
         if (!subflowWf) {
           throw badRequest(
             `Subflow node ${nodeRef} references a subflow that no longer exists. ` +
@@ -604,7 +608,7 @@ export async function pipelineRoutes(
         }
 
         // Recurse into the subflow's own nodes (nested subflows).
-        await resolveSubflowTree(subflowWf, userId, depth + 1, seen);
+        await resolveSubflowTree(subflowWf, orgId, depth + 1, seen);
       }
 
       return seen;
@@ -614,8 +618,8 @@ export async function pipelineRoutes(
     appWithAuth.post<{ Params: { id: string } }>(
       '/api/pipelines/:id/generate',
       async (req, reply) => {
-        const userId = (req.user as any).id;
-        const workflow = await storage.get(req.params.id, userId);
+        const orgId = getOrgId(req);
+        const workflow = await storage.get(req.params.id, orgId);
         if (!workflow) {
           throw notFound('Pipeline not found or unauthorized.');
         }
@@ -624,7 +628,7 @@ export async function pipelineRoutes(
           // 0. Recursively pre-resolve every referenced subflow document
           //    (no flattening) so buildIR can compile each system:subflow
           //    node into a nested composite IRStep — a real PTransform class.
-          const subflowDocs = await resolveSubflowTree(workflow, userId);
+          const subflowDocs = await resolveSubflowTree(workflow, orgId);
           const resolveSubflow: SubflowResolver = (id) => {
             const doc = subflowDocs.get(id);
             return doc ? { workflow: doc } : undefined;
@@ -679,8 +683,8 @@ export async function pipelineRoutes(
     appWithAuth.post<{ Params: { id: string } }>(
       '/api/pipelines/:id/execute',
       async (req, reply) => {
-        const userId = (req.user as any).id;
-        const workflow = await storage.get(req.params.id, userId);
+        const orgId = getOrgId(req);
+        const workflow = await storage.get(req.params.id, orgId);
         if (!workflow) {
           throw notFound('Pipeline not found or unauthorized.');
         }
@@ -688,7 +692,7 @@ export async function pipelineRoutes(
         try {
           // Generate code first — same recursive subflow resolution as /generate,
           // so subflows compile to real nested PTransform classes.
-          const subflowDocs = await resolveSubflowTree(workflow, userId);
+          const subflowDocs = await resolveSubflowTree(workflow, orgId);
           const resolveSubflow: SubflowResolver = (id) => {
             const doc = subflowDocs.get(id);
             return doc ? { workflow: doc } : undefined;
@@ -723,9 +727,8 @@ export async function pipelineRoutes(
     appWithAuth.get<{ Params: { id: string; execId: string } }>(
       '/api/pipelines/:id/executions/:execId',
       async (req, reply) => {
-        const userId = (req.user as any).id;
         // Access check
-        const workflow = await storage.get(req.params.id, userId);
+        const workflow = await storage.get(req.params.id, getOrgId(req));
         if (!workflow) {
           throw notFound('Pipeline not found or unauthorized.');
         }

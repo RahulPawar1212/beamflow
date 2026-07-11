@@ -61,6 +61,8 @@ export interface GeneratedArtifact {
 export interface NavigationStackEntry {
   pipelineId: string | null;
   pipelineName: string;
+  isSubflow: boolean;
+  pipelineParameters: Array<{ id: string; name: string; type: string; targetNodeId: string; targetSettingKey: string; }>;
   nodes: Node<NodeData>[];
   edges: Edge[];
   history: HistoryEntry[];
@@ -983,6 +985,8 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     const currentEntry: NavigationStackEntry = {
       pipelineId: state.pipelineId,
       pipelineName: state.pipelineName,
+      isSubflow: state.isSubflow,
+      pipelineParameters: state.pipelineParameters,
       nodes: state.nodes,
       edges: state.edges,
       history: state.history,
@@ -1011,6 +1015,8 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       navigationStack: stack,
       pipelineId: parentEntry.pipelineId,
       pipelineName: parentEntry.pipelineName,
+      isSubflow: parentEntry.isSubflow,
+      pipelineParameters: parentEntry.pipelineParameters,
       nodes: parentEntry.nodes,
       edges: parentEntry.edges,
       history: parentEntry.history,

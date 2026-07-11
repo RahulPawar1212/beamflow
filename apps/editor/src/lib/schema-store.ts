@@ -107,6 +107,15 @@ interface SchemaStoreState {
 
 const engine = new SchemaPropagationEngine();
 
+// Stable reference returned when a node has no issues, so repeated selector
+// reads (e.g. useSyncExternalStore in useNodeIssues) don't see a "changed"
+// value every render — a fresh `[]` on each call caused an infinite render
+// loop in NodeIssueBadge ("Maximum update depth exceeded").
+const EMPTY_ISSUES: SchemaValidationIssue[] = [];
+// Same reasoning for useNodeSchema's fallback: emptySchema() allocates a new
+// object per call, which broke reference-equality checks the same way.
+const EMPTY_SCHEMA: PipelineSchema = emptySchema();
+
 function expandNodesAndEdgesForSchema(
   nodes: WorkflowNode[],
   edges: WorkflowEdge[],
@@ -412,15 +421,15 @@ export const useSchemaStore = create<SchemaStoreState>((set, get) => {
     },
 
     getSchema: (nodeId) => {
-      return get().schemas.get(nodeId)?.outputSchema ?? emptySchema();
+      return get().schemas.get(nodeId)?.outputSchema ?? EMPTY_SCHEMA;
     },
 
     getIssues: (nodeId) => {
-      return get().schemas.get(nodeId)?.issues ?? [];
+      return get().schemas.get(nodeId)?.issues ?? EMPTY_ISSUES;
     },
 
     hasErrors: (nodeId) => {
-      const issues = get().schemas.get(nodeId)?.issues ?? [];
+      const issues = get().schemas.get(nodeId)?.issues ?? EMPTY_ISSUES;
       return issues.some((i) => i.severity === 'error');
     },
 

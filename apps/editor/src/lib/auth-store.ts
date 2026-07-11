@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { api } from '../api/client.js';
+import { api } from '../api/client';
 
 export interface User {
   id: string;

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { X, RefreshCw, AlertCircle, Maximize2, Minimize2, Database } from 'lucide-react';
-import { useWorkflowStore } from '../store/workflow-store.js';
-import { api } from '../api/client.js';
+import { useWorkflowStore } from '../store/workflow-store';
+import { api } from '../api/client';
 import type { PreviewRowsResponse } from '@beamflow/shared';
 
 export function PreviewPanel() {

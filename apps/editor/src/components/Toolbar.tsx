@@ -9,9 +9,9 @@ import {
   Sun, Moon, SunDim, LogOut, User, FolderOpen, Plus, Trash2, Clock, Settings,
   Boxes, Pencil, History, RotateCcw, AlertTriangle
 } from 'lucide-react';
-import { useWorkflowStore } from '../store/workflow-store.js';
+import { useWorkflowStore } from '../store/workflow-store';
 import { useAuthStore } from '../lib/auth-store.js';
-import { api, type PipelineSummary, type ProjectDTO } from '../api/client.js';
+import { api, type PipelineSummary, type ProjectDTO } from '../api/client';
 import {
   Dialog,
   DialogContent,

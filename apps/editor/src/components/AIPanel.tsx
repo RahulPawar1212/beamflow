@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { X, Sparkles, Send, Loader2 } from 'lucide-react';
-import { useWorkflowStore } from '../store/workflow-store.js';
-import { api } from '../api/client.js';
+import { useWorkflowStore } from '../store/workflow-store';
+import { api } from '../api/client';
 import { nanoid } from 'nanoid';
 import dagre from 'dagre';
 

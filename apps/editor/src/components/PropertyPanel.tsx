@@ -6,10 +6,10 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { X, Settings2, Trash2, Plus, Database, UploadCloud, Loader2, Boxes, Link } from 'lucide-react';
-import { useWorkflowStore } from '../store/workflow-store.js';
-import { useSchemaStore } from '../lib/schema-store.js';
-import { api } from '../api/client.js';
-import type { NodeDef } from '../api/client.js';
+import { useWorkflowStore } from '../store/workflow-store';
+import { useSchemaStore } from '../lib/schema-store';
+import { api } from '../api/client';
+import type { NodeDef } from '../api/client';
 
 export function PropertyPanel() {
   const selectedNodeId = useWorkflowStore((s) => s.selectedNodeId);

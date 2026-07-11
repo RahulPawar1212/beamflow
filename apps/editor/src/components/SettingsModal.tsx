@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { X, Key, Save, Loader2, CheckCircle2 } from 'lucide-react';
-import { api } from '../api/client.js';
+import { api } from '../api/client';
 
 interface SettingsModalProps {
   isOpen: boolean;

@@ -151,7 +151,7 @@ describe("entering/exiting a subflow preserves the parent's identity", () => {
     useWorkflowStore.getState().enterSubflow({
       schemaVersion: '1.0.0',
       metadata: { id: 'child_1', name: 'child', isSubflow: true, createdAt: '', updatedAt: '' },
-      nodes: [{ id: 'out', type: 'system:subflow-output', settings: { outputName: 'Output 1' } }],
+      nodes: [{ id: 'out', type: 'system:subflow-output', settings: { outputName: 'Output 1' }, position: { x: 0, y: 0 } }],
       connections: [],
     } as SerializedWorkflowDTO);
     expect(useWorkflowStore.getState().isSubflow).toBe(true);
@@ -170,7 +170,7 @@ describe("entering/exiting a subflow preserves the parent's identity", () => {
     useWorkflowStore.getState().enterSubflow({
       schemaVersion: '1.0.0',
       metadata: { id: 'child_1', name: 'child', isSubflow: true, createdAt: '', updatedAt: '' },
-      nodes: [{ id: 'out', type: 'system:subflow-output', settings: { outputName: 'Output 1' } }],
+      nodes: [{ id: 'out', type: 'system:subflow-output', settings: { outputName: 'Output 1' }, position: { x: 0, y: 0 } }],
       connections: [],
     } as SerializedWorkflowDTO);
     useWorkflowStore.getState().exitSubflow();

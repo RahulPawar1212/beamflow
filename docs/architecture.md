@@ -176,8 +176,21 @@ The `@beamflow/beam-generator` package takes the optimized IR and compiles it in
 ### Deduplicated Imports
 The generator maintains separate collections for standard imports (`import json`) and from-imports (`from apache_beam import io`). During code assembly, it groups all sub-imports from the same module, deduplicates them, sorts them alphabetically, and writes them at the top of the file.
 
-### Safe Variable Resolution
-Since node IDs generated in the frontend can contain special characters (e.g., `node_cW58aIf-dffq`), they are sanitized into safe Python variable names (`step_node_cW58aIf_dffq`) before emission.
+### Label-driven, collision-free naming
+Each node's generated names derive from its (user-editable) **label** plus a short distinct
+suffix from its unique node id — `nodeNameBase(label, id)` = `<labelPrefix>_<idSuffix>` in
+`python-emitter.ts`. Both the pcollection **variable** (`pcollVarName`, lower-snake) and the
+Beam transform **label** (`stepLabelName`, verbatim) build from that one base, so they share
+a prefix while staying unique. e.g. a node labeled "Filter" with id `node_a1b2c3d4` →
+`filter_a1b2c3d4 = … | 'Filter_a1b2c3d4' >> FilterTransform(…)`.
+
+The id suffix is what makes two nodes that share a label (the default label is the node-type
+name, so two Filter nodes both start as "Filter") produce **distinct** variables and step
+labels — which also prevents Apache Beam's runtime "duplicate transform label" error. Renaming
+a node in the Property Panel changes the prefix of both its variable and its step label; the id
+suffix appears only in generated code, never on the canvas. (Class names have their own dedup
+via `uniqueClassName`; inner labels inside each PTransform's `expand()` live in a separate
+per-instance scope and are unaffected.)
 
 ---
 

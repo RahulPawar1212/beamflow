@@ -61,6 +61,22 @@ startup by `runMigrations()`.
   `listSubflows(orgId, projectId?)` scopes the subflow library; `create` writes
   `project_id`; `update` only touches `project_id` when the caller supplies one.
 
+### Name uniqueness
+Names are unique within their scope, enforced server-side (case-insensitive) with a **409**:
+- **Projects** are unique **per org** (`projectsRepo.nameExists(orgId, name, excludeId?)`,
+  checked in `routes/projects.ts` on create + rename).
+- **Workflows** are unique **per project**, and **subflows** are unique **per project** — as
+  two separate namespaces, so a workflow and a subflow in the same project may share a name
+  (`workflowsRepo.nameExists(orgId, projectId, name, isSubflow, excludeId?)`, checked in
+  `routes/pipelines.ts` on create + rename; `excludeId` allows a no-op rename-to-self).
+- Create only enforces it when an explicit name is supplied — a blank "new workflow" keeps
+  the default and is checked on its first named save (PUT).
+- The name-conflict 409 body carries **no** `current`/`currentVersion`, which is how the
+  editor distinguishes it from the optimistic-concurrency 409 (see
+  [db-auth-architecture.md §D](db-auth-architecture.md)): a name clash is a plain error
+  toast, not the reload banner. A blocked save also sets the store's `saveBlockedReason`,
+  pausing auto-save until the next edit so it doesn't retry-loop.
+
 ### Cascade delete — done in the app, not the DB
 Deleting a project deletes **all** its workflows — regular AND subflows — plus each one's
 versions and variables. (Subflows used to be spared; now that they're project-scoped they

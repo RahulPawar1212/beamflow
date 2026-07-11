@@ -468,3 +468,91 @@ describe('pipeline routes', () => {
     });
   });
 });
+
+// The suite above uses MemoryStorage, which overwrites wholesale and so never
+// exercises workflowsRepo.update — the real production path, and the actual
+// choke point that must reject an isSubflow flip (a route-level guard alone
+// isn't enough if a future call site writes through the repo directly).
+// These tests use the default DrizzleStorage (in-memory SQLite in test env)
+// to prove the guarantee holds all the way down.
+describe('workflowsRepo identity guarantee (real DrizzleStorage)', () => {
+  let app: FastifyInstance;
+  let token: string;
+
+  beforeEach(async () => {
+    ({ app } = await buildApp({}));
+    await app.ready();
+
+    const email = `repo_id_${Math.random().toString(36).substring(2, 8)}@example.com`;
+    const userReg = await app.inject({
+      method: 'POST',
+      url: '/api/auth/register',
+      payload: { email, password: 'password123', name: 'Repo Identity' },
+    });
+    token = userReg.json().token;
+  });
+
+  afterEach(async () => {
+    await app.close();
+  });
+
+  it('a PUT with isSubflow: true cannot flip a real (DB-persisted) workflow into a subflow', async () => {
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/pipelines',
+      headers: { Authorization: `Bearer ${token}` },
+      payload: { name: 'Real Plain Workflow' },
+    });
+    const id = created.json().metadata.id;
+    expect(created.json().metadata.isSubflow).toBe(false);
+
+    const workflow = created.json() as SerializedWorkflow;
+    await app.inject({
+      method: 'PUT',
+      url: `/api/pipelines/${id}`,
+      headers: { Authorization: `Bearer ${token}` },
+      payload: { ...workflow, metadata: { ...workflow.metadata, isSubflow: true } },
+    });
+
+    const got = await app.inject({
+      method: 'GET',
+      url: `/api/pipelines/${id}`,
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(got.json().metadata.isSubflow).toBe(false);
+
+    // It also must not show up in the subflow-only listing.
+    const subflows = await app.inject({
+      method: 'GET',
+      url: '/api/pipelines?subflowsOnly=true',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(subflows.json().pipelines.map((p: any) => p.id)).not.toContain(id);
+  });
+
+  it('a real subflow stays a subflow across repeated saves, even if the client sends isSubflow: false', async () => {
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/pipelines',
+      headers: { Authorization: `Bearer ${token}` },
+      payload: { name: 'Real Subflow', isSubflow: true },
+    });
+    const id = created.json().metadata.id;
+    expect(created.json().metadata.isSubflow).toBe(true);
+
+    const workflow = created.json() as SerializedWorkflow;
+    await app.inject({
+      method: 'PUT',
+      url: `/api/pipelines/${id}`,
+      headers: { Authorization: `Bearer ${token}` },
+      payload: { ...workflow, metadata: { ...workflow.metadata, isSubflow: false } },
+    });
+
+    const got = await app.inject({
+      method: 'GET',
+      url: `/api/pipelines/${id}`,
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(got.json().metadata.isSubflow).toBe(true);
+  });
+});

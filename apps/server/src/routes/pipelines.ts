@@ -239,7 +239,9 @@ export async function pipelineRoutes(
         // (POST) — a plain update must never flip a workflow into a subflow or
         // vice versa, even if the client sends a different value (e.g. stale
         // editor state after navigating through a subflow). Always keep the
-        // value already on record.
+        // value already on record. (workflowsRepo.update is the authoritative
+        // enforcement point since it's the single choke point for every write;
+        // this mirrors it here too so the response body reflects reality.)
         const toSave: SerializedWorkflow = {
           ...workflow,
           metadata: {

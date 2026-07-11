@@ -91,11 +91,26 @@ export const workflowsRepo = {
 
   async update(workflow: SerializedWorkflow, ownerId: string): Promise<void> {
     const now = workflow.metadata.updatedAt;
+
+    // isSubflow is IDENTITY, fixed once at create() and never mutable by an
+    // ordinary update — regardless of which route or caller reaches here, or
+    // what the caller's workflow object claims. Re-read the row we're actually
+    // about to overwrite and pin isSubflow to its existing value. This is the
+    // single choke point for every workflow write, so this is the one place
+    // that guarantees identity can't drift (a route-level check alone can be
+    // bypassed by a new/changed call site).
+    const existing = await this.get(workflow.metadata.id, ownerId);
+    const isSubflow = existing ? (existing.metadata.isSubflow ? 1 : 0) : (workflow.metadata.isSubflow ? 1 : 0);
+    const persistedWorkflow: SerializedWorkflow = {
+      ...workflow,
+      metadata: { ...workflow.metadata, isSubflow: !!isSubflow },
+    };
+
     const setValues: Record<string, unknown> = {
       name: workflow.metadata.name,
       description: workflow.metadata.description || '',
-      settingsJson: JSON.stringify(workflow),
-      isSubflow: workflow.metadata.isSubflow ? 1 : 0,
+      settingsJson: JSON.stringify(persistedWorkflow),
+      isSubflow,
       updatedAt: now,
     };
     // Only touch project_id when the caller supplied one (allows moving a workflow

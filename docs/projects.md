@@ -1,15 +1,16 @@
 # Projects — grouping workflows
 
-A **project** is a user-owned container for a set of workflows. Users create a project
-per body of work (e.g. one per client or data domain), switch between projects, and only
-see the (regular) workflows belonging to the active project. Every regular workflow
-belongs to exactly one project.
+A **project** is an **org-owned** container for a set of workflows (and subflows). Every
+member of the organization sees and works in the same projects (see
+[db-auth-architecture.md](db-auth-architecture.md) for the org model). Users switch
+between projects and see the (regular) workflows belonging to the active project. Every
+regular workflow belongs to exactly one project.
 
-**Subflows are NOT project-scoped.** They are a user-global shared library (reusable
-across all projects), so they have `project_id = null` and survive project deletion.
-See [subflows.md §9](subflows.md#9-shared-library-global-scope-picker-references). Where
-this document says "workflow" below, it means a regular (non-subflow) workflow unless
-noted.
+**Subflows ARE project-scoped** (this changed with the org model — they used to be a
+user-global library). A subflow belongs to a project like any workflow, its library
+listing is per-project, and it is deleted with its project. See
+[subflows.md §9](subflows.md#9-project-scoped-library-picker-references). Where this
+document says "workflow" below, it means a regular (non-subflow) workflow unless noted.
 
 This complements [architecture.md](architecture.md), [subflows.md](subflows.md), and
 [db-auth-architecture.md](db-auth-architecture.md).
@@ -22,51 +23,50 @@ A `projects` table owns workflows via a nullable `project_id` FK on `workflows`
 (`apps/server/src/db/schema.ts`, both SQLite and Postgres dialects):
 
 ```
-users ──1:N──▶ projects ──1:N──▶ workflows ──1:N──▶ workflow_versions
-                                          └──1:N──▶ variables
+organizations ──1:N──▶ projects ──1:N──▶ workflows ──1:N──▶ workflow_versions
+                                                   └──1:N──▶ variables
 ```
 
-- `projects`: `id` (PK), `owner_id` (FK → users, cascade), `name`, `description`,
-  `created_at`, `updated_at`.
+- `projects`: `id` (PK), `org_id` (FK → organizations, access scope), `owner_id`
+  (FK → users, creator/provenance), `name`, `description`, `created_at`, `updated_at`.
 - `workflows.project_id`: **nullable** FK → projects. Nullable so the migration can add
-  the column to existing rows, so the startup backfill can fill regular workflows, and
-  so subflows can stay project-less.
-- **Subflows (`is_subflow = 1`) keep `project_id = null`** — they are a global shared
-  library, not owned by any project. `workflowsRepo.list` never applies the `projectId`
-  filter to subflows, `POST /api/pipelines` skips project assignment for them, the
-  startup backfill skips them, and project deletion spares them
-  (see [subflows.md §9](subflows.md#9-shared-library-global-scope-picker-references)).
-- Shared type: `IProject` and `IWorkflowMetadata.projectId` in
-  `packages/shared/src/types.ts`. `projectId` also rides inside the workflow's
-  `settings_json`, but the dedicated indexed column is what queries filter on.
+  the column to existing rows and so the startup backfill can fill it.
+- **Subflows (`is_subflow = 1`) are project-scoped too** — they carry a real `project_id`
+  like any workflow. `workflowsRepo.listSubflows(orgId, projectId?)` filters by project,
+  `POST /api/pipelines` assigns subflows a project, the startup backfill fills them, and
+  project deletion removes them
+  (see [subflows.md §9](subflows.md#9-project-scoped-library-picker-references)).
+- Shared type: `IProject` (has `orgId` + `ownerId`) and `IWorkflowMetadata.projectId`/
+  `orgId`/`version` in `packages/shared/src/types.ts`. `projectId` also rides inside the
+  workflow's `settings_json`, but the dedicated indexed column is what queries filter on.
 
-Migration: `apps/server/drizzle/{sqlite,postgres}/0003_*` (generated with
-`drizzle-kit generate`, applied automatically on startup by `runMigrations()`).
+Migrations: `apps/server/drizzle/{sqlite,postgres}/0003_*` (projects) and `0004_*` (org
+scoping + `version`), generated with `drizzle-kit generate`, applied automatically on
+startup by `runMigrations()`.
 
 ---
 
 ## 2. Server
 
-- **`projects.repo.ts`** — `list / get / create / update / delete` scoped by `ownerId`
-  (same ownership-guard pattern as the other repos), plus `ensureDefaultProject(ownerId)`.
-- **`routes/projects.ts`** — `GET/POST/PUT/DELETE /api/projects`, auth-guarded, wired in
-  `app.ts` next to the other route groups.
+- **`projects.repo.ts`** — `list / get / create / update / delete` scoped by `orgId`
+  (same org-guard pattern as the other repos), plus `ensureDefaultProject(orgId, ownerId)`.
+- **`routes/projects.ts`** — `GET/POST/PUT/DELETE /api/projects`, auth-guarded, scoped via
+  `getOrgId(req)`, wired in `app.ts` next to the other route groups.
 - **`routes/pipelines.ts`** —
   - `GET /api/pipelines?projectId=<id>` filters to a project (and still honors
     `includeSubflows`); the summary now includes `projectId`.
-  - `POST /api/pipelines` accepts `projectId`; for a **regular** workflow, when omitted it
-    falls back to the user's default project (`ensureDefaultProject`). For a **subflow**
-    it assigns no project (`project_id = null`).
-- **`workflows.repo.ts`** — `list`'s `projectId` filter applies to regular workflows only
-  (never hides subflows); `create` writes `project_id`; `update` only touches `project_id`
-  when the caller supplies one.
+  - `POST /api/pipelines` accepts `projectId`; when omitted it falls back to the org's
+    default project (`ensureDefaultProject`) — for subflows too.
+- **`workflows.repo.ts`** — `list`'s `projectId` filter scopes regular workflows;
+  `listSubflows(orgId, projectId?)` scopes the subflow library; `create` writes
+  `project_id`; `update` only touches `project_id` when the caller supplies one.
 
 ### Cascade delete — done in the app, not the DB
-Deleting a project deletes its **regular** workflows (and each one's versions and
-variables) but **keeps subflows** — `projectsRepo.delete` filters to `is_subflow=0` and
-null-outs any subflow's `projectId` so the DB-level FK cascade can't take it either.
-Implemented **explicitly** (leaf rows → regular workflows → project), **not** via SQLite
-`ON DELETE CASCADE`.
+Deleting a project deletes **all** its workflows — regular AND subflows — plus each one's
+versions and variables. (Subflows used to be spared; now that they're project-scoped they
+go with the project. The `getReferences` warn-but-allow guard and the same-project picker
+keep cross-project references from arising.) Implemented **explicitly** (leaf rows →
+workflows → project), **not** via SQLite `ON DELETE CASCADE`.
 
 > **Why:** libSQL opens a fresh connection per statement for local files, so a one-off
 > `PRAGMA foreign_keys = ON` does not reliably apply to every query — the DB-level cascade
@@ -96,16 +96,16 @@ Implemented **explicitly** (leaf rows → regular workflows → project), **not*
 
 ## 4. Existing data — startup backfill
 
-`ensureDefaultProjects()` (`projects.repo.ts`), run after migrations in `app.ts`, is
-idempotent:
+`ensureDefaultProjects()` (`projects.repo.ts`), run after migrations **and after
+`ensureDefaultOrg()`** in `app.ts`, is idempotent:
 
-1. Find **regular** workflows with `project_id IS NULL` (excludes `is_subflow=1` — subflows
-   are intentionally project-less and must not be backfilled).
-2. For each owning user, ensure a **"Default Project"** exists.
+1. Find **all** workflows with `project_id IS NULL` (regular AND subflows — subflows are
+   project-scoped now and get backfilled too).
+2. Group by `org_id`; for each org, ensure a **"Default Project"** exists.
 3. Set those workflows' `project_id` to that project.
 
-Once every regular workflow has a project it is a no-op. This is why the FK is nullable and
-the per-user default is created in application code rather than in raw migration SQL.
+Once every workflow has a project it is a no-op. This is why the FK is nullable and the
+per-org default is created in application code rather than in raw migration SQL.
 
 ---
 

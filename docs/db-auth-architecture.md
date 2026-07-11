@@ -76,8 +76,22 @@ erDiagram
         text gemini_api_key
         text created_at
     }
+    organizations {
+        text id PK
+        text name
+        text created_at
+        text updated_at
+    }
+    memberships {
+        text id PK
+        text org_id FK
+        text user_id FK
+        text role
+        text created_at
+    }
     projects {
         text id PK
+        text org_id FK
         text owner_id FK
         text name
         text description
@@ -86,12 +100,14 @@ erDiagram
     }
     workflows {
         text id PK
+        text org_id FK
         text owner_id FK
         text project_id FK
         text name
         text description
         text settings_json
         integer is_subflow
+        integer version
         text created_at
         text updated_at
     }
@@ -112,19 +128,32 @@ erDiagram
         integer is_secret
     }
 
-    users ||--o{ projects : owns
-    users ||--o{ workflows : owns
+    organizations ||--o{ memberships : has
+    users ||--o{ memberships : joins
+    organizations ||--o{ projects : scopes
+    organizations ||--o{ workflows : scopes
+    users ||--o{ projects : created
+    users ||--o{ workflows : created
     projects ||--o{ workflows : groups
     workflows ||--o{ workflow_versions : snapshotted_in
     workflows ||--o{ variables : configures
 ```
 
 **Notes on recent columns/tables:**
-- `projects` groups a user's **regular** workflows; see [projects.md](projects.md).
-- `workflows.project_id` is a **nullable** FK. Regular workflows are backfilled to a
-  per-user "Default Project" on startup; **subflows keep `project_id = null`** — they are
-  a user-global shared library, not owned by a project (see
-  [subflows.md §9](subflows.md#9-shared-library-global-scope-picker-references)).
+- **Organizations are the access scope.** `organizations` + `memberships` (user↔org,
+  with `role`) were added so members of an org share its projects/workflows/subflows.
+  `projects.org_id` and `workflows.org_id` carry the scope; `owner_id` is retained as
+  **creator/provenance only**, no longer the access gate. A single "Default Organization"
+  is backfilled on startup (`ensureDefaultOrg`), every user auto-joins it (earliest =
+  `owner`), and registration mints a JWT carrying `orgId`. The schema models multiple
+  orgs even though one is used today — multi-tenant is data, not a migration.
+- `projects` groups an **org's** workflows and subflows; see [projects.md](projects.md).
+- `workflows.project_id` is a **nullable** FK, backfilled to the org's "Default Project"
+  on startup. **Subflows are now project-scoped too** (they used to be a global library);
+  see [subflows.md §9](subflows.md#9-project-scoped-library-picker-references).
+- `workflows.version` is a monotonic integer used as the optimistic-concurrency token:
+  a save carries the version it was based on, the server 409s if the stored version moved
+  on, and bumps it on a clean write (see §4.D).
 - `workflows.is_subflow` marks reusable nested pipelines; see [subflows.md](subflows.md).
 - `users.gemini_api_key` stores the user's own Gemini key for the AI Flow Maker.
 
@@ -153,19 +182,38 @@ app.register(async (appWithAuth) => {
 ```
 This isolates the auth guard, keeping metadata routes (`/api/nodes`) and health checks public.
 
-### B. User-Scoped Data Fetching (Row-Level Security)
-Every repository operation takes the authenticated user ID (`req.user.id`) as a mandatory parameter:
+### B. Org-Scoped Data Fetching (Row-Level Security)
+Every repository operation takes the caller's **organization id** as a mandatory
+parameter, and every query `AND`s `eq(table.orgId, orgId)` into its `WHERE`:
 ```typescript
 // workflows.repo.ts
-async get(id: string, ownerId: string): Promise<SerializedWorkflow | null> {
+async get(id: string, orgId: string): Promise<SerializedWorkflow | null> {
   const results = await db
     .select()
     .from(workflowsTable)
-    .where(and(eq(workflowsTable.id, id), eq(workflowsTable.ownerId, ownerId)));
+    .where(and(eq(workflowsTable.id, id), eq(workflowsTable.orgId, orgId)));
   ...
 }
 ```
-If User A requests a pipeline owned by User B, the query returns no rows, resulting in a `404 Not Found` response. Attempting to modify or delete another user's pipeline results in a `404 / 403` boundary.
+Routes resolve the scope via `getOrgId(req)` (`auth-context.ts`), which reads `orgId`
+from the JWT — the single place the token shape is read, so org-switching / per-project
+access later touches only that helper. A request for a pipeline in another org returns no
+rows → `404`. Members of the **same** org share full read/write/delete access to its data
+(that is the point). `owner_id` still travels on each row but only records who created it;
+`getUserId(req)` supplies it where provenance is written (create). Leaf tables
+(`workflow_versions`, `variables`) have no org column — they authorize transitively by
+looking up the parent workflow scoped by `orgId`.
+
+### D. Optimistic-Concurrency Saves (no lost updates)
+Because org members can edit the same pipeline, `PUT /api/pipelines/:id` is
+version-guarded. The client sends the `version` it loaded; `workflowsRepo.update` writes
+only if the stored `version` still matches (a conditional `UPDATE … WHERE version=?`,
+atomic against a concurrent writer), returning `{ ok:false, currentVersion }` otherwise.
+The route then responds **409** with the authoritative current state — nothing is
+clobbered — and the editor shows a reload/keep banner (`ConflictError` in `api/client.ts`).
+Every successful save bumps the version and writes a `workflow_versions` snapshot, so the
+version-history feature (previously dormant) is now populated and browsable/restorable in
+the editor's History panel. The editor also auto-saves (debounced ~2s, flush on tab close).
 
 ### C. Dynamic Database Routing
 The connection manager `src/db/client.ts` detects the driver format on initialization:

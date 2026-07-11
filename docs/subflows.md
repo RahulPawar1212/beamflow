@@ -6,9 +6,10 @@ a subflow, and from then on the parent shows one **proxy node** in place of the 
 The subflow itself is a normal pipeline row in the database (flagged `isSubflow`), so
 it can be edited independently and referenced by many parents.
 
-Subflows are a **user-global shared library**: they are *not* tied to a project, are
-reusable from any project, and are attached to a parent either by "Group as node" or
-by dragging the **Subflow** node from the palette and picking an existing one. See
+Subflows are a **project-scoped shared library**: each belongs to a project (shared with
+every member of the org), is reusable by any workflow in that project, and is attached to
+a parent either by "Group as node" or by dragging the **Subflow** node from the palette
+and picking an existing one. See
 [§10 Shared library](#10-shared-library-global-scope-picker-references).
 
 This document describes how subflows are represented, persisted, expanded for schema
@@ -89,8 +90,9 @@ didn't even mention `parameters`), so a freshly-saved subflow silently lost its
   `0002_*`) alongside the full workflow JSON.
 
 The main pipeline **list** (`GET /api/pipelines`) hides subflows by default; pass
-`?includeSubflows=true` to include them, or `?subflowsOnly=true` for the shared library
-(§10). A subflow's `projectId` is **null** — subflows are not project-scoped (§10).
+`?includeSubflows=true` to include them, or `?subflowsOnly=true` (optionally with
+`&projectId=…`) for the project's subflow library (§9). A subflow's `projectId` is set to
+its project, like any workflow (§9).
 
 ### 3.1 `isSubflow` is locked identity — guarded at every write
 
@@ -328,47 +330,54 @@ and the outer's `expand()` instantiates the inner class like any other PTransfor
 
 ---
 
-## 9. Shared library (global scope, picker, references)
+## 9. Project-scoped library (picker, references)
 
-Subflows are a **user-global shared library** — define once, reuse in any workflow in
-any project. This is deliberate: a subflow is like a shared function, so it is decoupled
-from project ownership and lifecycle.
+Subflows are a **project-scoped shared library** — define once, reuse in any workflow in
+the **same project**, and (because projects are org-scoped) shared with every member of
+the org. A subflow belongs to its project the same way a regular workflow does.
 
-### Scope: subflows are not project-owned
-- A subflow's `project_id` is **null**. The `POST /api/pipelines` route skips the
-  default-project assignment when `isSubflow` is true (`routes/pipelines.ts`), and
-  `createSubflowFromSelection` no longer sends a `projectId`.
-- `workflowsRepo.list` applies a `projectId` filter to **regular workflows only** — it
-  never hides subflows (`workflows.repo.ts`).
-- Startup backfill (`ensureDefaultProjects`) excludes `is_subflow=1`, so subflows are
-  never re-attached to a project on boot.
+> **History:** subflows were originally a *user-global* library (`project_id = null`,
+> reusable across every project, spared by project delete). When the app moved to
+> org-level projects, subflows became project-scoped like everything else — the change
+> below reverses the old global-library rules.
+
+### Scope: subflows belong to a project
+- A subflow's `project_id` is set at creation. `POST /api/pipelines` assigns the requested
+  project (else the org default) for subflows just like regular workflows
+  (`routes/pipelines.ts`); `createSubflowFromSelection` sends the current `projectId`.
+- `workflowsRepo.listSubflows(orgId, projectId?)` filters by project; the
+  `?subflowsOnly=true&projectId=…` listing returns that project's library.
+- Startup backfill (`ensureDefaultProjects`) re-keys **every** project-less workflow,
+  subflows included, into its org's default project.
 
 ### Finding, attaching & managing subflows
 - The **Subflows** toolbar button opens the **Subflow Library** modal
-  (`SubflowLibraryModal` in `Toolbar.tsx`): search the library, **open** a subflow to
-  edit it, or **delete** one (with the used-by guard below).
+  (`SubflowLibraryModal` in `Toolbar.tsx`): search the **current project's** library,
+  **open** a subflow to edit it, or **delete** one (with the used-by guard below).
 - The **Subflow** palette node is draggable; the boundary nodes
   (`system:subflow-input` / `-output`) are hidden from the palette (they only exist
   inside a subflow being edited) — filtered by type in `NodePalette.tsx`.
 - Selecting a `system:subflow` node shows a **searchable picker** in the Property Panel
-  (`SubflowPicker` in `PropertyPanel.tsx`): the whole library
-  (`api.listSubflows` → `GET /api/pipelines?subflowsOnly=true`), each row showing
-  **name + description + "used by N"**, filterable, excluding the currently-open
-  workflow (no self-reference). Picking one sets `subflowId` (→ `refreshSubflowCache(true)`
-  → central schema-sync) and relabels the node to the subflow's name.
+  (`SubflowPicker` in `PropertyPanel.tsx`): the current project's library
+  (`api.listSubflows(currentProjectId)` → `GET /api/pipelines?subflowsOnly=true&projectId=…`),
+  each row showing **name + description + "used by N"**, filterable, excluding the
+  currently-open workflow (no self-reference). Picking one sets `subflowId`
+  (→ `refreshSubflowCache(true)` → central schema-sync) and relabels the node.
 
 ### References & the "used by N" count
 - A parent references a subflow via a `system:subflow` node with
   `settings.subflowId = <child id>`, embedded in the parent's `settings_json`.
-- `workflowsRepo.countReferences(ownerId, subflowId)` scans the owner's workflows for
-  that reference. Exposed at `GET /api/pipelines/:id/references` → `{ count, names[] }`,
-  and folded into the `subflowsOnly` list as `usedByCount`.
+- `workflowsRepo.countReferences(orgId, subflowId)` scans the **org's** workflows for
+  that reference (org-wide, since a reference can live in any of the org's workflows).
+  Exposed at `GET /api/pipelines/:id/references` → `{ count, names[] }`, and folded into
+  the `subflowsOnly` list as `usedByCount`.
 
 ### Deletion semantics
-- **Deleting a project keeps its subflows.** `projectsRepo.delete` only deletes regular
-  workflows (`is_subflow=0`) of that project and null-outs any subflow's `projectId` so
-  the DB-level FK cascade can't take it either. The project-delete confirmation copy says
-  so.
+- **Deleting a project deletes its subflows too.** `projectsRepo.delete` removes all of
+  the project's workflows including subflows (the old "spare subflows / null-out
+  projectId" carve-out is gone). The `getReferences` warn-but-allow guard still protects
+  against orphaning a referenced subflow, and the picker only offers same-project
+  subflows so cross-project references shouldn't arise in normal use.
 - **Deleting a subflow** is done from the Subflow Library modal (`Toolbar.tsx`).
   Referenced subflows warn but are allowed (user's choice): if `usedByCount > 0` the
   delete confirms with "Used by N workflow(s) … delete anyway?". (Warn-but-allow, not

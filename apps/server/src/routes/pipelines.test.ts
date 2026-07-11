@@ -844,4 +844,58 @@ describe('org-scoped shared access (real DrizzleStorage)', () => {
     });
     expect(res.statusCode).toBe(401);
   });
+
+  // Subflows are project-scoped (as of the org change): a subflow belongs to the
+  // project it was created in, its library listing is per-project, and it is
+  // deleted with its project.
+  it('a subflow is listed only in its own project and deleted with that project', async () => {
+    // Two projects in the shared org.
+    const projA = (await app.inject({
+      method: 'POST', url: '/api/projects',
+      headers: { Authorization: `Bearer ${tokenA}` }, payload: { name: 'Project A' },
+    })).json().id;
+    const projB = (await app.inject({
+      method: 'POST', url: '/api/projects',
+      headers: { Authorization: `Bearer ${tokenA}` }, payload: { name: 'Project B' },
+    })).json().id;
+
+    // A subflow created in Project A.
+    const subflow = await app.inject({
+      method: 'POST', url: '/api/pipelines',
+      headers: { Authorization: `Bearer ${tokenA}` },
+      payload: {
+        name: 'A Subflow', isSubflow: true, projectId: projA,
+        nodes: [{ id: 'out', type: 'system:subflow-output', settings: { outputName: 'Output 1' }, position: { x: 0, y: 0 } }],
+      },
+    });
+    expect(subflow.statusCode).toBe(201);
+    const subflowId = subflow.json().metadata.id;
+    expect(subflow.json().metadata.projectId).toBe(projA);
+
+    // Listed in Project A's library...
+    const libA = await app.inject({
+      method: 'GET', url: `/api/pipelines?subflowsOnly=true&projectId=${projA}`,
+      headers: { Authorization: `Bearer ${tokenB}` },
+    });
+    expect(libA.json().pipelines.map((p: any) => p.id)).toContain(subflowId);
+
+    // ...but NOT in Project B's library.
+    const libB = await app.inject({
+      method: 'GET', url: `/api/pipelines?subflowsOnly=true&projectId=${projB}`,
+      headers: { Authorization: `Bearer ${tokenB}` },
+    });
+    expect(libB.json().pipelines.map((p: any) => p.id)).not.toContain(subflowId);
+
+    // Deleting Project A removes its subflow too (no longer spared).
+    const del = await app.inject({
+      method: 'DELETE', url: `/api/projects/${projA}`,
+      headers: { Authorization: `Bearer ${tokenB}` },
+    });
+    expect(del.statusCode).toBe(204);
+    const gone = await app.inject({
+      method: 'GET', url: `/api/pipelines/${subflowId}`,
+      headers: { Authorization: `Bearer ${tokenA}` },
+    });
+    expect(gone.statusCode).toBe(404);
+  });
 });

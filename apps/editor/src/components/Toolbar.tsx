@@ -1011,9 +1011,9 @@ function WorkflowSwitcherModal({
 }
 
 // ─── Subflow Library Modal ──────────────────────────────────────────
-// Browse and manage the user-global subflow library: open a subflow to edit it,
-// or delete it (with a "used by N" warning, since deleting a referenced subflow
-// leaves those workflows with a missing-subflow error). Exported for testing.
+// Browse and manage the current project's subflow library: open a subflow to
+// edit it, or delete it (with a "used by N" warning, since deleting a referenced
+// subflow leaves those workflows with a missing-subflow error). Exported for testing.
 export function SubflowLibraryModal({
   onClose,
   onOpen,
@@ -1026,16 +1026,18 @@ export function SubflowLibraryModal({
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const currentId = useWorkflowStore((s) => s.pipelineId);
+  const currentProjectId = useWorkflowStore((s) => s.currentProjectId);
   const addToast = useWorkflowStore((s) => s.addToast);
 
   useEffect(() => {
     let mounted = true;
+    // Subflows are project-scoped — show the current project's library.
     api
-      .listSubflows()
+      .listSubflows(currentProjectId ?? undefined)
       .then((res) => { if (mounted) { setSubflows(res.pipelines); setLoading(false); } })
       .catch((err) => { if (mounted) { setError(err instanceof Error ? err.message : 'Failed to load subflows'); setLoading(false); } });
     return () => { mounted = false; };
-  }, []);
+  }, [currentProjectId]);
 
   const handleDelete = async (e: React.MouseEvent, s: PipelineSummary) => {
     e.stopPropagation();

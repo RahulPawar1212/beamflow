@@ -136,9 +136,11 @@ export const api = {
     const query = params.toString() ? `?${params.toString()}` : '';
     return request<{ pipelines: PipelineSummary[] }>(`/pipelines${query}`);
   },
-  /** The user-global subflow library (all projects), each with usedByCount. */
-  listSubflows: () =>
-    request<{ pipelines: PipelineSummary[] }>('/pipelines?subflowsOnly=true'),
+  /** The subflow library, scoped to a project when given, each with usedByCount. */
+  listSubflows: (projectId?: string) =>
+    request<{ pipelines: PipelineSummary[] }>(
+      `/pipelines?subflowsOnly=true${projectId ? `&projectId=${seg(projectId)}` : ''}`,
+    ),
   /** How many workflows reference a given subflow (for the delete guard). */
   getReferences: (id: string) =>
     request<{ count: number; names: string[] }>(`/pipelines/${seg(id)}/references`),

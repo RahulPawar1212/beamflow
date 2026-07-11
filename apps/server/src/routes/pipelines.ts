@@ -126,16 +126,17 @@ export async function pipelineRoutes(
     // ─── CRUD ─────────────────────────────────────────────────────────
 
     /** GET /api/pipelines — List saved pipelines.
-     *  ?subflowsOnly=true → the user-global subflow library (with usedByCount).
+     *  ?subflowsOnly=true → the subflow library, scoped to ?projectId when given.
      *  ?projectId=… scopes regular workflows; ?includeSubflows mixes subflows in. */
     appWithAuth.get<{ Querystring: { includeSubflows?: string; projectId?: string; subflowsOnly?: string } }>('/api/pipelines', async (req, reply) => {
       const orgId = getOrgId(req);
       const subflowsOnly = req.query.subflowsOnly === 'true';
 
       if (subflowsOnly) {
-        // The shared library: all the org's subflows, each with how many
-        // workflows reference it (for the picker's "used by N" + delete guard).
-        const subflows = await workflowsRepo.listSubflows(orgId);
+        // The project's subflow library, each with how many workflows reference
+        // it (for the picker's "used by N" + delete guard). usedByCount stays
+        // org-wide since a reference can live in any of the org's workflows.
+        const subflows = await workflowsRepo.listSubflows(orgId, req.query.projectId || undefined);
         const summaries = await Promise.all(subflows.map(async (w) => ({
           id: w.metadata.id,
           name: w.metadata.name,
@@ -213,16 +214,12 @@ export async function pipelineRoutes(
           }
         }
 
-        // Subflows are a shared library — reusable across projects — so they are
-        // NOT tied to a project (projectId stays null). Regular workflows are
-        // scoped to the requested project, or the org's default.
-        // (Phase 5 revisits making subflows project-scoped.)
-        let projectId: string | undefined;
-        if (!isSubflow) {
-          projectId = (req.body as Record<string, any>)?.projectId as string | undefined;
-          if (!projectId) {
-            projectId = (await projectsRepo.ensureDefaultProject(orgId, userId)).id;
-          }
+        // Both regular workflows AND subflows are project-scoped: a subflow is a
+        // reusable building block within its project's library. Use the requested
+        // project, else the org's default.
+        let projectId = (req.body as Record<string, any>)?.projectId as string | undefined;
+        if (!projectId) {
+          projectId = (await projectsRepo.ensureDefaultProject(orgId, userId)).id;
         }
 
         const workflow: SerializedWorkflow = {

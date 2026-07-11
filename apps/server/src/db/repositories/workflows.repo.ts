@@ -29,12 +29,18 @@ export const workflowsRepo = {
     return results.map((row: any) => JSON.parse(row.settingsJson));
   },
 
-  /** All of the org's subflows (the shared library) — never project-scoped. */
-  async listSubflows(orgId: string): Promise<SerializedWorkflow[]> {
+  /**
+   * The org's subflows. Subflows are PROJECT-SCOPED (as of the org change):
+   * pass `projectId` to get the library reusable within that project. Omitting
+   * it returns every subflow in the org (used by admin/reference tooling).
+   */
+  async listSubflows(orgId: string, projectId?: string): Promise<SerializedWorkflow[]> {
+    const conditions = [eq(workflowsTable.orgId, orgId), eq(workflowsTable.isSubflow, 1)];
+    if (projectId) conditions.push(eq(workflowsTable.projectId, projectId));
     const results = await db
       .select()
       .from(workflowsTable)
-      .where(and(eq(workflowsTable.orgId, orgId), eq(workflowsTable.isSubflow, 1)));
+      .where(and(...conditions));
     return results.map((row: any) => JSON.parse(row.settingsJson));
   },
 

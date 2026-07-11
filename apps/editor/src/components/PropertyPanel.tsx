@@ -713,6 +713,7 @@ function SubflowPicker({
   baseInputClass: string;
 }) {
   const currentPipelineId = useWorkflowStore((s) => s.pipelineId);
+  const currentProjectId = useWorkflowStore((s) => s.currentProjectId);
   const updateNodeLabel = useWorkflowStore((s) => s.updateNodeLabel);
   const [subflows, setSubflows] = React.useState<SubflowRow[]>([]);
   const [loading, setLoading] = React.useState(true);
@@ -720,8 +721,9 @@ function SubflowPicker({
 
   React.useEffect(() => {
     let mounted = true;
+    // Subflows are project-scoped: only offer ones from the current project.
     api
-      .listSubflows()
+      .listSubflows(currentProjectId ?? undefined)
       .then((res) => {
         if (!mounted) return;
         setSubflows(
@@ -733,7 +735,7 @@ function SubflowPicker({
       })
       .catch(() => { if (mounted) setLoading(false); });
     return () => { mounted = false; };
-  }, [currentPipelineId]);
+  }, [currentPipelineId, currentProjectId]);
 
   const filtered = query.trim()
     ? subflows.filter((s) =>

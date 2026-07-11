@@ -141,12 +141,48 @@ Or `npx drizzle-kit studio` from `apps/server` for a GUI.
 | Preview shows stale data / stuck error | preview cache `stale`/`failed` state | [preview-and-troubleshooting.md](preview-and-troubleshooting.md) |
 | Subflow code-gen fails "Required input port not connected" | proxy rewiring uses wrong port id | server `expandSubflows` in `routes/pipelines.ts` |
 | UI change "doesn't show up" | duplicate Vite servers / stale bundle / HMR kept old store | check ports 517x, clear `apps/editor/node_modules/.vite`, hard-refresh |
+| **Drop/add does nothing; or one component's state change never reaches another** | **duplicate store instance from mismatched import specifiers** (see §4.1) | `grep` the store's import strings; unify them |
 
 > **Stale-bundle warning (important):** Zustand stores are module singletons. Vite HMR
 > often keeps the *old* store instance in memory after you edit `workflow-store.ts` or
 > `schema-store.ts`, so a fix appears not to work. When a store change "isn't taking
 > effect": stop the dev server, `rm -rf apps/editor/node_modules/.vite`, restart one
 > server, hard-refresh (Ctrl+Shift+R).
+
+### 4.1 Duplicate store from mismatched import specifiers
+
+**Signature:** an action clearly runs but has no effect — e.g. dropping a palette node does
+nothing, or state you set in one component is never seen by another. No error is thrown.
+
+**Cause:** a store module's identity IS its store — the top-level `export const useX =
+create(...)` runs *once per loaded module*. Vite/ESM key the module cache by the **exact
+import string**, resolved *before* it maps to a file. So importing the same file two ways —
+`'../store/workflow-store'` in one file and `'../store/workflow-store.js'` in another —
+loads it **twice**, runs `create(...)` **twice**, and yields **two independent stores**.
+Components then split across the two: whoever writes state (e.g. `App.tsx` calling
+`setNodeDefinitions`) may land on store B while whoever reads it (Canvas/NodePalette) is on
+store A. The classic failure was drop-does-nothing: `addNode` on store A found an empty
+`nodeDefinitions` and silently hit `if (!def) return`. Same hazard for any editor singleton
+(`schema-store`) and, for `api/client`, a cross-copy `instanceof` failure (e.g. `ConflictError`).
+
+**How to check (do this first when the signature matches):**
+```bash
+# From apps/editor/src — one specifier per singleton means one line of output.
+grep -rn "store/workflow-store\(\.js\)\?['\"]" --include=*.ts --include=*.tsx . | grep -v test
+grep -rn "schema-store\(\.js\)\?['\"]"        --include=*.ts --include=*.tsx . | grep -v test
+grep -rn "api/client\(\.js\)\?['\"]"          --include=*.ts --include=*.tsx . | grep -v test
+```
+If you see **both** `.../x` and `.../x.js` for the same module, that's the bug. To confirm at
+runtime, temporarily log in the reading component: `console.warn(useWorkflowStore.getState().nodeDefinitions.length)`
+— `0` while the palette shows nodes proves the reader is on the empty duplicate store.
+
+**Fix:** normalize every app-code import of that module to ONE specifier (the repo standard
+is **extensionless** — `'../store/workflow-store'`, the form Canvas/NodePalette/schema-store
+use). Never add a `.js` variant of a store/singleton import. After fixing, **hard-refresh** —
+a duplicate store lingers in browser memory until a full reload (see the stale-bundle box).
+
+**Prevent:** when adding a new import of any shared singleton, copy the exact specifier an
+existing render-critical file uses; don't hand-type `.js`.
 
 ---
 

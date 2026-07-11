@@ -14,8 +14,33 @@ export const sqliteUsers = sqliteTable('users', {
   createdAt: text('created_at').notNull(),
 });
 
+// Organizations are the top-level access scope. Members of an org share its
+// projects/workflows/subflows. Nullable FKs elsewhere are backfilled to a single
+// "Default Organization" on startup (see ensureDefaultOrg).
+export const sqliteOrganizations = sqliteTable('organizations', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+});
+
+export const sqliteMemberships = sqliteTable('memberships', {
+  id: text('id').primaryKey(),
+  orgId: text('org_id')
+    .notNull()
+    .references(() => sqliteOrganizations.id, { onDelete: 'cascade' }),
+  userId: text('user_id')
+    .notNull()
+    .references(() => sqliteUsers.id, { onDelete: 'cascade' }),
+  role: text('role').notNull().default('member'), // 'owner' | 'admin' | 'member'
+  createdAt: text('created_at').notNull(),
+});
+
 export const sqliteProjects = sqliteTable('projects', {
   id: text('id').primaryKey(),
+  // Access scope. Nullable so existing rows can be backfilled on startup.
+  orgId: text('org_id').references(() => sqliteOrganizations.id, { onDelete: 'cascade' }),
+  // Creator — provenance/attribution, no longer the access gate.
   ownerId: text('owner_id')
     .notNull()
     .references(() => sqliteUsers.id, { onDelete: 'cascade' }),
@@ -27,6 +52,9 @@ export const sqliteProjects = sqliteTable('projects', {
 
 export const sqliteWorkflows = sqliteTable('workflows', {
   id: text('id').primaryKey(),
+  // Access scope. Nullable so existing rows can be backfilled on startup.
+  orgId: text('org_id').references(() => sqliteOrganizations.id, { onDelete: 'cascade' }),
+  // Creator — provenance/attribution, no longer the access gate.
   ownerId: text('owner_id')
     .notNull()
     .references(() => sqliteUsers.id, { onDelete: 'cascade' }),
@@ -36,6 +64,8 @@ export const sqliteWorkflows = sqliteTable('workflows', {
   description: text('description').notNull().default(''),
   settingsJson: text('settings_json').notNull(), // Serialized JSON string
   isSubflow: integer('is_subflow').notNull().default(0), // 0 or 1
+  // Monotonic optimistic-concurrency token; bumped on every clean save.
+  version: integer('version').notNull().default(1),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
 });
@@ -75,8 +105,28 @@ export const pgUsers = pgTable('users', {
   createdAt: pgText('created_at').notNull(),
 });
 
+export const pgOrganizations = pgTable('organizations', {
+  id: pgText('id').primaryKey(),
+  name: pgText('name').notNull(),
+  createdAt: pgText('created_at').notNull(),
+  updatedAt: pgText('updated_at').notNull(),
+});
+
+export const pgMemberships = pgTable('memberships', {
+  id: pgText('id').primaryKey(),
+  orgId: pgText('org_id')
+    .notNull()
+    .references(() => pgOrganizations.id, { onDelete: 'cascade' }),
+  userId: pgText('user_id')
+    .notNull()
+    .references(() => pgUsers.id, { onDelete: 'cascade' }),
+  role: pgText('role').notNull().default('member'), // 'owner' | 'admin' | 'member'
+  createdAt: pgText('created_at').notNull(),
+});
+
 export const pgProjects = pgTable('projects', {
   id: pgText('id').primaryKey(),
+  orgId: pgText('org_id').references(() => pgOrganizations.id, { onDelete: 'cascade' }),
   ownerId: pgText('owner_id')
     .notNull()
     .references(() => pgUsers.id, { onDelete: 'cascade' }),
@@ -88,6 +138,7 @@ export const pgProjects = pgTable('projects', {
 
 export const pgWorkflows = pgTable('workflows', {
   id: pgText('id').primaryKey(),
+  orgId: pgText('org_id').references(() => pgOrganizations.id, { onDelete: 'cascade' }),
   ownerId: pgText('owner_id')
     .notNull()
     .references(() => pgUsers.id, { onDelete: 'cascade' }),
@@ -97,6 +148,8 @@ export const pgWorkflows = pgTable('workflows', {
   description: pgText('description').notNull().default(''),
   settingsJson: pgText('settings_json').notNull(), // Serialized JSON string
   isSubflow: pgInteger('is_subflow').notNull().default(0), // 0 or 1
+  // Monotonic optimistic-concurrency token; bumped on every clean save.
+  version: pgInteger('version').notNull().default(1),
   createdAt: pgText('created_at').notNull(),
   updatedAt: pgText('updated_at').notNull(),
 });

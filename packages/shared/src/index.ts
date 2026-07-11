@@ -25,6 +25,8 @@ export {
   type IConnection,
   type IWorkflowMetadata,
   type IProject,
+  type IOrganization,
+  type IMembership,
   type IWorkflow,
   type IRStepDefinition,
   type ValidationIssue,

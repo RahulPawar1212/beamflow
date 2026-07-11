@@ -4,6 +4,7 @@ import {
   sqliteWorkflows, pgWorkflows,
   sqliteWorkflowVersions, pgWorkflowVersions,
   sqliteVariables, pgVariables,
+  sqliteOrganizations, pgOrganizations,
 } from '../schema.js';
 import { eq, and, isNull, inArray } from 'drizzle-orm';
 import { generateId, timestamp } from '@beamflow/shared';
@@ -13,6 +14,20 @@ const projectsTable = isPostgres ? pgProjects : sqliteProjects;
 const workflowsTable = isPostgres ? pgWorkflows : sqliteWorkflows;
 const versionsTable = isPostgres ? pgWorkflowVersions : sqliteWorkflowVersions;
 const variablesTable = isPostgres ? pgVariables : sqliteVariables;
+const orgsTable = isPostgres ? pgOrganizations : sqliteOrganizations;
+
+/**
+ * Resolve the default org id. During the one-org rollout there is exactly one
+ * organization row (created by ensureDefaultOrg); this returns it so callers
+ * that don't yet thread an explicit orgId still write scoped rows.
+ */
+async function resolveDefaultOrgId(): Promise<string> {
+  const rows = await db.select({ id: orgsTable.id }).from(orgsTable).limit(1);
+  if (rows.length === 0) {
+    throw new Error('No organization exists yet (ensureDefaultOrg must run first).');
+  }
+  return (rows[0] as any).id;
+}
 
 export const projectsRepo = {
   async list(ownerId: string): Promise<IProject[]> {
@@ -33,12 +48,17 @@ export const projectsRepo = {
   },
 
   async create(
-    data: { name: string; description?: string },
+    data: { name: string; description?: string; orgId?: string },
     ownerId: string,
   ): Promise<IProject> {
     const now = timestamp();
+    // Access scope: use the caller-supplied org, else resolve the (single, for
+    // now) default org. Phase 2 threads orgId through every caller explicitly;
+    // this fallback keeps existing call sites working during the transition.
+    const orgId = data.orgId ?? (await resolveDefaultOrgId());
     const project: IProject = {
       id: generateId('project'),
+      orgId,
       ownerId,
       name: data.name,
       description: data.description || '',

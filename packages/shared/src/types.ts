@@ -267,17 +267,45 @@ export interface IWorkflowMetadata {
   readonly parameters?: ReadonlyArray<ISubflowParameter>;
   /** The project this workflow/subflow belongs to. */
   readonly projectId?: string;
+  /** The organization this workflow/subflow belongs to (access scope). */
+  readonly orgId?: string;
+  /**
+   * Monotonic per-workflow revision counter used as the optimistic-concurrency
+   * token. The editor sends the version it loaded; the server rejects a save
+   * (409) if the stored version has moved on, then bumps it on a clean write.
+   * Undefined for never-saved (client-only) workflows.
+   */
+  readonly version?: number;
 }
 
-/** A project groups a user's workflows and subflows. */
+/** A project groups an organization's workflows and subflows. */
 export interface IProject {
   readonly id: string;
   readonly name: string;
   readonly description?: string;
-  /** Owning user id. */
+  /** Owning organization id (access scope). */
+  readonly orgId: string;
+  /** Creating user id — provenance/attribution, not an access gate. */
   readonly ownerId: string;
   readonly createdAt: string;
   readonly updatedAt: string;
+}
+
+/** An organization is the top-level access scope; its members share its data. */
+export interface IOrganization {
+  readonly id: string;
+  readonly name: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+/** A user's membership in an organization. */
+export interface IMembership {
+  readonly id: string;
+  readonly orgId: string;
+  readonly userId: string;
+  readonly role: 'owner' | 'admin' | 'member';
+  readonly createdAt: string;
 }
 
 /** Definition of a parameter exposed from a subflow's internal node. */

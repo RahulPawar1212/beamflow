@@ -24,6 +24,7 @@ import { DrizzleStorage, type IStorage } from './storage.js';
 import { registerErrorHandler } from './errors.js';
 import { runMigrations } from './db/migrate.js';
 import { ensureDefaultProjects } from './db/repositories/projects.repo.js';
+import { ensureDefaultOrg } from './db/repositories/orgs.repo.js';
 
 // Augment FastifyInstance type to include authenticate
 declare module 'fastify' {
@@ -62,6 +63,12 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<{
   if (!options.skipMigrations) {
     await runMigrations().catch((err) => {
       console.error('[buildApp] Error running migrations on startup:', err);
+    });
+    // Idempotent backfill: establish the shared Default Organization, make every
+    // user a member, and re-key every project/workflow to it. Runs BEFORE the
+    // project backfill so orgs exist first. No-op once every row has an org_id.
+    await ensureDefaultOrg().catch((err) => {
+      console.error('[buildApp] Error ensuring default organization:', err);
     });
     // Idempotent backfill: give every user a Default project and file any
     // project-less workflow into it (no-op once all workflows have a project).

@@ -138,6 +138,46 @@ export function toPythonVar(id: string): string {
 }
 
 /**
+ * Short distinct suffix derived from a step/node id, e.g. `node_a1b2c3d4` → `a1b2c3d4`,
+ * `abc__s2` → `abc_s2`. Sanitized to id-safe chars. This is what makes two same-named
+ * nodes produce distinct code names.
+ */
+function idSuffix(id: string): string {
+  // Prefer the part after the last `_` (our ids are `node_<nanoid>`); fall back to
+  // the whole id. Always sanitize.
+  const raw = id.includes('_') ? id.slice(id.lastIndexOf('_') + 1) : id;
+  const safe = raw.replace(/[^a-zA-Z0-9]/g, '');
+  return safe || id.replace(/[^a-zA-Z0-9]/g, '') || 'x';
+}
+
+/**
+ * The shared naming base for a node's generated code: `<labelPrefix>_<idSuffix>`.
+ *
+ * Both the pcollection variable name AND the Beam transform label derive from this so
+ * they share a prefix (the human node label) and carry the same distinct id suffix —
+ * satisfying "variable name and label name prefix should be the same" while guaranteeing
+ * uniqueness (the id is unique per node, so two "Filter" nodes never collide — which also
+ * prevents Beam's runtime "duplicate transform label" error).
+ *
+ * `label` is the (possibly user-edited) node label; `id` is the unique step/node id.
+ */
+export function nodeNameBase(label: string, id: string): string {
+  const prefix = (label || '').replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  const base = prefix || 'step';
+  return `${base}_${idSuffix(id)}`;
+}
+
+/** The pcollection variable name for a node: lower-snake, from the shared base. */
+export function pcollVarName(label: string, id: string): string {
+  return toPythonVar(nodeNameBase(label, id).toLowerCase());
+}
+
+/** The Beam transform label string for a node: the shared base, verbatim (id-safe). */
+export function stepLabelName(label: string, id: string): string {
+  return nodeNameBase(label, id);
+}
+
+/**
  * Escape a string for use in a Python string literal.
  */
 export function toPythonString(value: string): string {

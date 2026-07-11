@@ -201,6 +201,38 @@ describe('Beam Generator Package', () => {
       expect(generated.code).toContain("FilterTransform(field='a', operator='==', value='1')");
       expect(generated.code).toContain("FilterTransform(field='b', operator='==', value='2')");
     });
+
+    it('two nodes with the SAME label get distinct variables and distinct Beam step labels', () => {
+      // The default node label is the node-type name, so two Filter nodes both
+      // start labeled "Filter". Beam rejects duplicate transform labels at runtime,
+      // so codegen must make them distinct via the node id — while keeping the
+      // label as the shared prefix of both the variable and the step label.
+      const pipeline = {
+        id: 'dup', name: 'Dup Labels', version: '1.0.0',
+        steps: [
+          { id: 'node_src0001', label: 'CSV Source', type: IRStepType.Read, operation: 'ReadFromCSV', params: { filePath: 'a.csv' }, inputs: [], imports: [] },
+          { id: 'node_aaaa1111', label: 'Filter', type: IRStepType.Transform, operation: 'Filter', params: { field: 'a', operator: '==', value: '1' }, inputs: ['node_src0001'], imports: [] },
+          { id: 'node_bbbb2222', label: 'Filter', type: IRStepType.Transform, operation: 'Filter', params: { field: 'b', operator: '==', value: '2' }, inputs: ['node_aaaa1111'], imports: [] },
+        ],
+        connections: [],
+      };
+      const generated = generatePythonBeam(pipeline as any);
+
+      // Distinct pcollection variables, each prefixed by the (lowercased) label.
+      expect(generated.code).toContain('filter_aaaa1111 =');
+      expect(generated.code).toContain('filter_bbbb2222 =');
+
+      // Distinct Beam step labels at the pipeline scope, each prefixed by the label
+      // — no collision. (The hardcoded inner label inside FilterTransform.expand()
+      // lives in a separate per-instance scope and is unaffected.)
+      expect(generated.code).toContain("'Filter_aaaa1111' >>");
+      expect(generated.code).toContain("'Filter_bbbb2222' >>");
+
+      // Variable prefix and label prefix are the same token ('filter' / 'Filter').
+      // And the CSV source shares its scheme too.
+      expect(generated.code).toContain('csv_source_src0001 =');
+      expect(generated.code).toContain("'CSV_Source_src0001' >>");
+    });
   });
 
   describe('PTransform class emission (composite/subflow steps)', () => {
@@ -247,7 +279,8 @@ describe('Beam Generator Package', () => {
       };
       const generated = generatePythonBeam(pipeline as any);
       expect(generated.code).toContain('p = pcoll.pipeline');
-      expect(generated.code).toContain("p | 'CSV Source' >> ReadFromCSVTransform(");
+      // Step label is now <labelPrefix>_<idSuffix> (unique per node), not the raw label.
+      expect(generated.code).toContain("p | 'CSV_Source_src' >> ReadFromCSVTransform(");
     });
 
     it('emits a composite class with expand() wrapping the nested pipeline', () => {
@@ -416,7 +449,8 @@ describe('Beam Generator Package', () => {
       const generated = generatePythonBeam(pipeline as any);
       expect(generated.code).toContain("return {'Output A':");
       expect(generated.code).toContain("'Output B':");
-      expect(generated.code).toContain("step_proxy['Output A']");
+      // Var name now derives from the proxy's label ('Multi Output') + id suffix.
+      expect(generated.code).toContain("multi_output_proxy['Output A']");
     });
 
     it('wires exposed subflow parameters to REAL __init__ constructor args, not baked-in literals', () => {

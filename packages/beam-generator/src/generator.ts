@@ -22,7 +22,7 @@
 
 import type { GeneratedPipeline } from '@beamflow/shared';
 import type { IRPipeline, IRStep } from '@beamflow/ir';
-import { PythonEmitter, toPythonVar, toPythonString } from './python-emitter.js';
+import { PythonEmitter, toPythonVar, toPythonString, pcollVarName, stepLabelName } from './python-emitter.js';
 
 /**
  * Emits the body of a class's `expand(self, pcoll)` method (or, for the
@@ -666,7 +666,7 @@ function emitStepInstantiation(step: IRStep, emitter: PythonEmitter, ctx: Genera
     const kwargs = compositeInstantiationKwargs(step);
     emitter.blank();
     emitter.comment(`Subflow: ${step.label}`);
-    emitter.line(`${varName} = ${inputExpr} | '${step.label}' >> ${entry.className}(${kwargs})`);
+    emitter.line(`${varName} = ${inputExpr} | '${stepLabelName(step.label, step.id)}' >> ${entry.className}(${kwargs})`);
     return;
   }
 
@@ -683,7 +683,7 @@ function emitStepInstantiation(step: IRStep, emitter: PythonEmitter, ctx: Genera
   const kwargs = handler.instantiationKwargs(step, ctx);
   emitter.blank();
   emitter.comment(`${step.label}`);
-  emitter.line(`${varName} = ${inputVar} | '${step.label}' >> ${entry.className}(${kwargs})`);
+  emitter.line(`${varName} = ${inputVar} | '${stepLabelName(step.label, step.id)}' >> ${entry.className}(${kwargs})`);
 
   for (const imp of step.imports) {
     addStepImport(emitter, imp);
@@ -787,7 +787,7 @@ function emitCompositeClass(
 
   const nestedVarNames = new Map<string, string>();
   for (const s of subPipeline.steps) {
-    nestedVarNames.set(s.id, toPythonVar(`step_${s.id}`));
+    nestedVarNames.set(s.id, pcollVarName(s.label, s.id));
   }
 
   // Real constructor parameterization: any nested step whose param is
@@ -891,7 +891,7 @@ export function generatePythonBeam(pipeline: IRPipeline): GeneratedPipeline {
 
   const topVarNames = new Map<string, string>();
   for (const step of pipeline.steps) {
-    topVarNames.set(step.id, toPythonVar(`step_${step.id}`));
+    topVarNames.set(step.id, pcollVarName(step.label, step.id));
   }
   const topContext: GenerationContext = { varNames: topVarNames, pipeline, classPlan, pipelineVarExpr: 'p' };
 

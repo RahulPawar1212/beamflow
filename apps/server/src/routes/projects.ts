@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { projectsRepo } from '../db/repositories/projects.repo.js';
-import { badRequest, notFound } from '../errors.js';
+import { badRequest, notFound, ApiError } from '../errors.js';
 import { getOrgId, getUserId } from '../auth-context.js';
 
 export async function projectRoutes(app: FastifyInstance): Promise<void> {
@@ -22,9 +22,14 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
         if (!name) {
           throw badRequest('Project name is required.');
         }
+        const orgId = getOrgId(req);
+        // Project names are unique per org.
+        if (await projectsRepo.nameExists(orgId, name)) {
+          throw new ApiError(409, `A project named "${name}" already exists in this organization.`);
+        }
         const project = await projectsRepo.create(
           { name, description: req.body?.description },
-          getOrgId(req),
+          orgId,
           getUserId(req),
         );
         return reply.status(201).send(project);
@@ -35,8 +40,14 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
     appWithAuth.put<{ Params: { id: string }; Body: { name?: string; description?: string } }>(
       '/api/projects/:id',
       async (req, reply) => {
-        const updated = await projectsRepo.update(req.params.id, getOrgId(req), {
-          name: req.body?.name?.trim(),
+        const orgId = getOrgId(req);
+        const newName = req.body?.name?.trim();
+        // Renaming to a name another project already uses is a conflict.
+        if (newName && (await projectsRepo.nameExists(orgId, newName, req.params.id))) {
+          throw new ApiError(409, `A project named "${newName}" already exists in this organization.`);
+        }
+        const updated = await projectsRepo.update(req.params.id, orgId, {
+          name: newName,
           description: req.body?.description,
         });
         if (!updated) {

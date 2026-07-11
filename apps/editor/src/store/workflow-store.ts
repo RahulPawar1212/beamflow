@@ -83,6 +83,10 @@ interface WorkflowState {
   // the server's authoritative current state; the Toolbar renders a banner from
   // it and clears it on reload/dismiss. null when there's no pending conflict.
   conflict: { currentVersion: number | null; current: SerializedWorkflowDTO | null } | null;
+  // Set to the server's message when a save was rejected for a non-retryable
+  // reason (e.g. a duplicate name). Suppresses auto-save until the next edit so
+  // it doesn't retry-loop and re-toast; cleared by any graph/name mutation.
+  saveBlockedReason: string | null;
   // Timestamps of the loaded record, preserved so toWorkflow() reflects the real
   // record instead of regenerating fresh timestamps on every serialization.
   pipelineCreatedAt: string | undefined;
@@ -235,6 +239,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   pipelineCreatedAt: undefined,
   pipelineUpdatedAt: undefined,
   conflict: null,
+  saveBlockedReason: null,
   currentProjectId: null,
   currentProjectName: '',
   nodes: [],
@@ -458,7 +463,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     set({ builtInDefinitions: defs, nodeDefinitions: [...defs, ...custom] });
   },
   setPipelineId: (id) => set({ pipelineId: id }),
-  setPipelineName: (name) => set({ pipelineName: name, isDirty: true }),
+  setPipelineName: (name) => set({ pipelineName: name, isDirty: true, saveBlockedReason: null }),
   setGenerating: (v) => set({ isGenerating: v }),
   setExecuting: (v) => set({ isExecuting: v }),
   setSaving: (v) => set({ isSaving: v }),
@@ -745,7 +750,8 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     const newHistory = state.history.slice(0, state.historyIndex + 1);
     newHistory.push(entry);
     if (newHistory.length > MAX_HISTORY) newHistory.shift();
-    set({ history: newHistory, historyIndex: newHistory.length - 1 });
+    // A fresh edit clears a non-retryable save block so auto-save can try again.
+    set({ history: newHistory, historyIndex: newHistory.length - 1, saveBlockedReason: null });
   },
 
   undo: () => {
@@ -806,6 +812,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
           pipelineUpdatedAt: created.metadata.updatedAt,
         });
       }
+      set({ saveBlockedReason: null });
       state.markSaved();
       return true;
     } catch (err) {
@@ -817,8 +824,13 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
         state.addToast('error', 'Save blocked: this pipeline was changed by someone else. Reload to see their changes.');
         return false;
       }
+      // Other save failures (e.g. a duplicate-name 409) are non-retryable: flag
+      // saveBlockedReason so auto-save stops re-firing until the next edit, and
+      // toast the server's message (which names the conflict).
       console.error('Failed to save workflow:', err);
-      state.addToast('error', `Failed to save: ${err instanceof Error ? err.message : String(err)}`);
+      const message = err instanceof Error ? err.message : String(err);
+      set({ saveBlockedReason: message });
+      state.addToast('error', `Failed to save: ${message}`);
       state.setSaving(false);
       return false;
     } finally {

@@ -67,6 +67,33 @@ export const workflowsRepo = {
     return { count: names.length, names };
   },
 
+  /**
+   * True if another pipeline of the SAME KIND in the SAME project already has this
+   * name (case-insensitive). Workflows and subflows are separate namespaces (a
+   * workflow and a subflow in one project may share a name; two workflows may not).
+   * `excludeId` skips a row so a rename-to-self isn't a conflict.
+   */
+  async nameExists(
+    orgId: string,
+    projectId: string | null | undefined,
+    name: string,
+    isSubflow: boolean,
+    excludeId?: string,
+  ): Promise<boolean> {
+    const target = name.trim().toLowerCase();
+    const conditions = [
+      eq(workflowsTable.orgId, orgId),
+      eq(workflowsTable.isSubflow, isSubflow ? 1 : 0),
+    ];
+    // A null projectId shouldn't normally occur post-backfill, but scope defensively.
+    if (projectId) conditions.push(eq(workflowsTable.projectId, projectId));
+    const rows = await db
+      .select({ id: workflowsTable.id, name: workflowsTable.name })
+      .from(workflowsTable)
+      .where(and(...conditions));
+    return rows.some((r: any) => r.id !== excludeId && (r.name ?? '').trim().toLowerCase() === target);
+  },
+
   async get(id: string, orgId: string): Promise<SerializedWorkflow | null> {
     const results = await db
       .select()

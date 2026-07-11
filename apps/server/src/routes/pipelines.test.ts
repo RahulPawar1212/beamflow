@@ -898,4 +898,114 @@ describe('org-scoped shared access (real DrizzleStorage)', () => {
     });
     expect(gone.statusCode).toBe(404);
   });
+
+  // ── Name uniqueness ──────────────────────────────────────────────
+  it('rejects a duplicate PROJECT name in the org (case-insensitive)', async () => {
+    const first = await app.inject({
+      method: 'POST', url: '/api/projects',
+      headers: { Authorization: `Bearer ${tokenA}` }, payload: { name: 'Sales' },
+    });
+    expect(first.statusCode).toBe(201);
+
+    // Same name, different member, different case → 409.
+    const dup = await app.inject({
+      method: 'POST', url: '/api/projects',
+      headers: { Authorization: `Bearer ${tokenB}` }, payload: { name: 'sales' },
+    });
+    expect(dup.statusCode).toBe(409);
+    expect(dup.json().error).toMatch(/already exists/i);
+  });
+
+  it('rejects a duplicate WORKFLOW name within the same project, allows it in another', async () => {
+    const projX = (await app.inject({
+      method: 'POST', url: '/api/projects',
+      headers: { Authorization: `Bearer ${tokenA}` }, payload: { name: 'ProjX' },
+    })).json().id;
+    const projY = (await app.inject({
+      method: 'POST', url: '/api/projects',
+      headers: { Authorization: `Bearer ${tokenA}` }, payload: { name: 'ProjY' },
+    })).json().id;
+
+    const w1 = await app.inject({
+      method: 'POST', url: '/api/pipelines',
+      headers: { Authorization: `Bearer ${tokenA}` },
+      payload: { name: 'Clean Data', projectId: projX },
+    });
+    expect(w1.statusCode).toBe(201);
+
+    // Same name in the SAME project → 409.
+    const dupSame = await app.inject({
+      method: 'POST', url: '/api/pipelines',
+      headers: { Authorization: `Bearer ${tokenB}` },
+      payload: { name: 'Clean Data', projectId: projX },
+    });
+    expect(dupSame.statusCode).toBe(409);
+
+    // Same name in a DIFFERENT project → allowed (workflows unique per project).
+    const okOther = await app.inject({
+      method: 'POST', url: '/api/pipelines',
+      headers: { Authorization: `Bearer ${tokenA}` },
+      payload: { name: 'Clean Data', projectId: projY },
+    });
+    expect(okOther.statusCode).toBe(201);
+  });
+
+  it('a workflow and a subflow may share a name in the same project (separate namespaces)', async () => {
+    const proj = (await app.inject({
+      method: 'POST', url: '/api/projects',
+      headers: { Authorization: `Bearer ${tokenA}` }, payload: { name: 'NsProj' },
+    })).json().id;
+
+    const wf = await app.inject({
+      method: 'POST', url: '/api/pipelines',
+      headers: { Authorization: `Bearer ${tokenA}` },
+      payload: { name: 'Shared Name', projectId: proj },
+    });
+    expect(wf.statusCode).toBe(201);
+
+    const sf = await app.inject({
+      method: 'POST', url: '/api/pipelines',
+      headers: { Authorization: `Bearer ${tokenA}` },
+      payload: {
+        name: 'Shared Name', projectId: proj, isSubflow: true,
+        nodes: [{ id: 'out', type: 'system:subflow-output', settings: { outputName: 'Output 1' }, position: { x: 0, y: 0 } }],
+      },
+    });
+    expect(sf.statusCode).toBe(201);
+  });
+
+  it('a rename-to-duplicate PUT is 409 but carries no version-conflict fields', async () => {
+    const proj = (await app.inject({
+      method: 'POST', url: '/api/projects',
+      headers: { Authorization: `Bearer ${tokenA}` }, payload: { name: 'RenProj' },
+    })).json().id;
+    await app.inject({
+      method: 'POST', url: '/api/pipelines',
+      headers: { Authorization: `Bearer ${tokenA}` }, payload: { name: 'Taken', projectId: proj },
+    });
+    const mover = (await app.inject({
+      method: 'POST', url: '/api/pipelines',
+      headers: { Authorization: `Bearer ${tokenA}` }, payload: { name: 'Mover', projectId: proj },
+    })).json() as SerializedWorkflow;
+
+    // Rename "Mover" → "Taken" (already used in this project) → 409, name-conflict shape.
+    const res = await app.inject({
+      method: 'PUT', url: `/api/pipelines/${mover.metadata.id}`,
+      headers: { Authorization: `Bearer ${tokenB}` },
+      payload: { ...mover, metadata: { ...mover.metadata, name: 'Taken' } },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toMatch(/already exists/i);
+    // NOT a concurrency conflict — no `current`/`currentVersion` so the editor
+    // shows a plain error, not the reload banner.
+    expect(res.json().current).toBeUndefined();
+
+    // Renaming to its OWN name is fine (exclude-self).
+    const noop = await app.inject({
+      method: 'PUT', url: `/api/pipelines/${mover.metadata.id}`,
+      headers: { Authorization: `Bearer ${tokenA}` },
+      payload: { ...mover, metadata: { ...mover.metadata, name: 'Mover' } },
+    });
+    expect(noop.statusCode).toBe(200);
+  });
 });

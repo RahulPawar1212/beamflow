@@ -222,11 +222,20 @@ export async function pipelineRoutes(
           projectId = (await projectsRepo.ensureDefaultProject(orgId, userId)).id;
         }
 
+        // Names are unique within a project, per kind (workflow vs subflow). Only
+        // enforced when the caller supplied an explicit name — a blank "new
+        // workflow" keeps the default and is checked on its first named save (PUT).
+        const explicitName = (req.body as Record<string, any>)?.name as string | undefined;
+        if (explicitName && (await workflowsRepo.nameExists(orgId, projectId, explicitName, isSubflow))) {
+          const kind = isSubflow ? 'subflow' : 'workflow';
+          throw new ApiError(409, `A ${kind} named "${explicitName}" already exists in this project.`);
+        }
+
         const workflow: SerializedWorkflow = {
           schemaVersion: SCHEMA_VERSION,
           metadata: {
             id,
-            name: (req.body as Record<string, any>)?.name || 'Untitled Pipeline',
+            name: explicitName || 'Untitled Pipeline',
             description: (req.body as Record<string, any>)?.description || '',
             isSubflow,
             parameters: (req.body as Record<string, any>)?.parameters || [],
@@ -279,6 +288,23 @@ export async function pipelineRoutes(
             updatedAt: timestamp(),
           },
         };
+
+        // Names are unique within a project, per kind. Check against the stored
+        // record's project + kind (identity is pinned above), excluding self so a
+        // no-op rename isn't a conflict.
+        if (
+          toSave.metadata.name &&
+          (await workflowsRepo.nameExists(
+            orgId,
+            existing.metadata.projectId,
+            toSave.metadata.name,
+            !!existing.metadata.isSubflow,
+            req.params.id,
+          ))
+        ) {
+          const kind = existing.metadata.isSubflow ? 'subflow' : 'workflow';
+          throw new ApiError(409, `A ${kind} named "${toSave.metadata.name}" already exists in this project.`);
+        }
 
         // Optimistic concurrency: the client sends the version it loaded. If a
         // teammate saved in the meantime, reject with 409 + the current server

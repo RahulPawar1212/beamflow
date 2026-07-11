@@ -27,6 +27,7 @@ interface AutoSaveState {
   isSaving: boolean;
   pipelineId: string | null;
   conflict: unknown | null;
+  saveBlockedReason: string | null;
 }
 interface StoreLike {
   getState: () => AutoSaveState & { saveWorkflow: () => Promise<boolean> };
@@ -39,7 +40,9 @@ let unsubscribe: (() => void) | null = null;
 let beforeUnloadHandler: (() => void) | null = null;
 
 function canAutoSave(s: AutoSaveState): boolean {
-  return s.isDirty && !s.isSaving && !!s.pipelineId && !s.conflict;
+  // Never auto-save while a conflict banner is up (would 409-loop) or while a
+  // non-retryable save is blocked (e.g. a duplicate name) — the user must act first.
+  return s.isDirty && !s.isSaving && !!s.pipelineId && !s.conflict && !s.saveBlockedReason;
 }
 
 function schedule(): void {

@@ -25,6 +25,20 @@ export const projectsRepo = {
     return results as IProject[];
   },
 
+  /**
+   * True if another project in this org already has this name (case-insensitive).
+   * `excludeId` skips a row (so renaming a project to its own name isn't a conflict).
+   * Names must be unique per org (see routes/projects.ts).
+   */
+  async nameExists(orgId: string, name: string, excludeId?: string): Promise<boolean> {
+    const target = name.trim().toLowerCase();
+    const rows = await db
+      .select({ id: projectsTable.id, name: projectsTable.name })
+      .from(projectsTable)
+      .where(eq(projectsTable.orgId, orgId));
+    return rows.some((r: any) => r.id !== excludeId && (r.name ?? '').trim().toLowerCase() === target);
+  },
+
   async get(id: string, orgId: string): Promise<IProject | null> {
     const results = await db
       .select()

@@ -67,7 +67,10 @@ async function request<T>(
       }
     }
     const body = await res.json().catch(() => ({}));
-    if (res.status === 409) {
+    // A version-conflict 409 carries `current`/`currentVersion`; a name-uniqueness
+    // 409 does not. Only the former is the concurrent-edit conflict the editor
+    // resolves with a reload banner — the latter is a plain validation error.
+    if (res.status === 409 && 'current' in (body as object)) {
       const b = body as { error?: string; currentVersion?: number | null; current?: SerializedWorkflowDTO | null };
       throw new ConflictError(
         b.error || 'This pipeline was changed by someone else.',

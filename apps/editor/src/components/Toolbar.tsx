@@ -7,7 +7,7 @@ import {
   Save, Play, Code2, Undo2, Redo2, Download, Upload,
   Loader2, Zap, Copy, Check, X, CheckCircle2, XCircle, FileCode2,
   Sun, Moon, SunDim, LogOut, User, FolderOpen, Plus, Trash2, Clock, Settings,
-  Boxes, Pencil
+  Boxes, Pencil, History, RotateCcw, AlertTriangle
 } from 'lucide-react';
 import { useWorkflowStore } from '../store/workflow-store.js';
 import { useAuthStore } from '../lib/auth-store.js';
@@ -56,10 +56,14 @@ export function Toolbar() {
   const [showSwitcher, setShowSwitcher] = useState(false);
   const [showProjects, setShowProjects] = useState(false);
   const [showSubflows, setShowSubflows] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
   const currentProjectId = useWorkflowStore((s) => s.currentProjectId);
   const currentProjectName = useWorkflowStore((s) => s.currentProjectName);
   const setCurrentProject = useWorkflowStore((s) => s.setCurrentProject);
   const saveWorkflow = useWorkflowStore((s) => s.saveWorkflow);
+  const conflict = useWorkflowStore((s) => s.conflict);
+  const reloadFromConflict = useWorkflowStore((s) => s.reloadFromConflict);
+  const dismissConflict = useWorkflowStore((s) => s.dismissConflict);
 
   // ─── Save ─────────────────────────────────────────────────────────
 
@@ -278,6 +282,15 @@ export function Toolbar() {
             onClick={() => setShowSubflows(true)}
           />
 
+          {/* Version history — only meaningful once the pipeline is saved. */}
+          <ToolbarButton
+            icon={History}
+            label="History"
+            hint="View & restore previous versions"
+            onClick={() => setShowHistory(true)}
+            disabled={!pipelineId}
+          />
+
           <div className="w-px h-5 bg-[var(--color-border)] mx-1" />
 
           {/* Undo/Redo */}
@@ -392,8 +405,40 @@ export function Toolbar() {
         </div>
       </div>
 
+      {/* Concurrent-edit conflict banner — a save was blocked because a teammate
+          saved this pipeline after we loaded it. Non-destructive: local edits are
+          preserved until the user chooses. */}
+      {conflict && (
+        <div className="flex items-center gap-3 px-4 py-2 bg-amber-500/15 border-b border-amber-500/40 text-amber-200 text-xs">
+          <AlertTriangle size={15} className="text-amber-400 shrink-0" />
+          <span className="flex-1 min-w-0">
+            Someone else saved this pipeline after you opened it, so your save was blocked.
+            Reload their version (discards your unsaved edits) or keep editing and save again to try once more.
+          </span>
+          <Button
+            size="sm"
+            onClick={reloadFromConflict}
+            className="h-7 px-2.5 bg-amber-500/25 hover:bg-amber-500/40 text-amber-100 font-medium shrink-0"
+          >
+            <RotateCcw size={13} className="mr-1" /> Reload latest
+          </Button>
+          <button
+            onClick={dismissConflict}
+            title="Keep my edits"
+            className="p-1 rounded text-amber-300/70 hover:text-amber-100 shrink-0"
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
+
       {/* Code Preview Modal */}
       {showCode && <CodeModal onClose={() => setShowCode(false)} />}
+
+      {/* Version History Modal */}
+      {showHistory && pipelineId && (
+        <VersionHistoryModal pipelineId={pipelineId} onClose={() => setShowHistory(false)} />
+      )}
 
       {/* Project Switcher Modal */}
       {showProjects && (
@@ -1089,6 +1134,111 @@ export function SubflowLibraryModal({
                         <Trash2 size={16} />
                       </button>
                     </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── Version History Modal ──────────────────────────────────────────
+// Lists the pipeline's saved versions (a snapshot is written on every successful
+// save) and lets the user restore one. Restoring loads the snapshot onto the
+// canvas as a dirty state — the next save moves history forward, never rewrites
+// it. Activates the previously-dormant versions API.
+function VersionHistoryModal({ pipelineId, onClose }: { pipelineId: string; onClose: () => void }) {
+  const [versions, setVersions] = useState<Array<{ id: string; version: number; createdAt: string; label: string | null }>>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [restoringId, setRestoringId] = useState<string | null>(null);
+  const loadWorkflow = useWorkflowStore((s) => s.loadWorkflow);
+  const addToast = useWorkflowStore((s) => s.addToast);
+
+  useEffect(() => {
+    let mounted = true;
+    api.getVersions(pipelineId)
+      .then((res) => { if (mounted) { setVersions(res.versions); setLoading(false); } })
+      .catch((err) => { if (mounted) { setError(err instanceof Error ? err.message : 'Failed to load history'); setLoading(false); } });
+    return () => { mounted = false; };
+  }, [pipelineId]);
+
+  const handleRestore = async (versionId: string, versionNum: number) => {
+    setRestoringId(versionId);
+    try {
+      const res = await api.getVersionSnapshot(pipelineId, versionId);
+      // The snapshot IS a full workflow document. Load it onto the canvas; it
+      // becomes the working copy (dirty), so saving forwards preserves history.
+      loadWorkflow((res as any).snapshot ?? res);
+      addToast('success', `Restored version ${versionNum}. Save to keep it as the latest.`);
+      onClose();
+    } catch (err) {
+      addToast('error', `Failed to restore: ${err instanceof Error ? err.message : err}`);
+    } finally {
+      setRestoringId(null);
+    }
+  };
+
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="max-w-[95vw] sm:max-w-2xl w-full p-0 gap-0 overflow-hidden bg-[var(--color-surface-100)] border-[var(--color-border)]">
+        <DialogHeader className="px-5 py-4 pr-12 border-b border-[var(--color-border)] bg-[var(--color-surface-200)]">
+          <DialogTitle className="flex items-center gap-2">
+            <History size={18} className="text-indigo-400" />
+            <span className="text-gray-200 text-base">Version History</span>
+          </DialogTitle>
+        </DialogHeader>
+
+        <div className="flex-1 overflow-y-auto max-h-[70vh] p-4 bg-[var(--color-surface-100)]">
+          {loading ? (
+            <div className="flex items-center justify-center py-12 text-gray-500 gap-2">
+              <Loader2 size={16} className="animate-spin" /> Loading history...
+            </div>
+          ) : error ? (
+            <div className="text-center py-8 text-red-400 text-sm">
+              <XCircle size={24} className="mx-auto mb-2 opacity-50" />{error}
+            </div>
+          ) : versions.length === 0 ? (
+            <div className="text-center py-12">
+              <History size={32} className="mx-auto mb-3 text-gray-600" />
+              <p className="text-sm font-medium text-gray-400">No saved versions yet</p>
+              <p className="text-xs text-gray-500 mt-1">A version is captured each time this pipeline is saved.</p>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-2">
+              {versions.map((v) => {
+                const date = new Date(v.createdAt).toLocaleString(undefined, {
+                  month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+                });
+                return (
+                  <div
+                    key={v.id}
+                    className="group px-4 py-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-200)]/40 flex items-center justify-between"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <span className="flex items-center justify-center h-7 min-w-7 px-1.5 rounded-full bg-indigo-500/20 text-indigo-300 text-xs font-bold">
+                        v{v.version}
+                      </span>
+                      <div className="min-w-0">
+                        {v.label && <div className="text-sm font-medium text-gray-200 truncate">{v.label}</div>}
+                        <div className="flex items-center gap-1.5 text-[11px] text-gray-500">
+                          <Clock size={11} className="opacity-70" /> {date}
+                        </div>
+                      </div>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={restoringId !== null}
+                      onClick={() => handleRestore(v.id, v.version)}
+                      className="h-7 px-2.5 text-indigo-400 hover:text-indigo-300 shrink-0"
+                    >
+                      {restoringId === v.id ? <Loader2 size={13} className="animate-spin mr-1" /> : <RotateCcw size={13} className="mr-1" />}
+                      Restore
+                    </Button>
                   </div>
                 );
               })}

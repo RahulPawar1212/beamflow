@@ -15,6 +15,7 @@ import { SettingsModal } from './components/SettingsModal.js';
 import { api } from './api/client.js';
 import { useSchemaStore } from './lib/schema-store.js';
 import { installSchemaSync } from './lib/schema-sync.js';
+import { installAutoSave } from './lib/auto-save.js';
 import { TooltipProvider } from './components/ui/tooltip.js';
 
 // Install the central schema-propagation subscriber once, from this leaf module
@@ -25,6 +26,10 @@ installSchemaSync(
   useWorkflowStore as unknown as Parameters<typeof installSchemaSync>[0],
   (nodes, edges) => useSchemaStore.getState().syncFromWorkflow(nodes, edges),
 );
+
+// Debounced auto-save: persist ~2s after edits stop, and flush on tab close.
+// Same leaf-module install pattern as schema-sync (no store import cycle).
+installAutoSave(useWorkflowStore as unknown as Parameters<typeof installAutoSave>[0]);
 
 export default function App() {
   const token = useAuthStore((s) => s.token);

@@ -304,12 +304,15 @@ function expandNodesAndEdgesForSchema(
 
 /**
  * Create the ISchemaNode for a workflow node, given its resolved node type.
- * Built-ins go through the shared registry as before. Calculation-kind
- * custom nodes (`kind: 'calculation'`) get a CustomCalcSchemaNode built from
- * their author-declared `outputColumns`, so added/removed/passthrough
- * columns actually propagate — the gap plain custom nodes still have.
- * Everything else (expression/composite custom nodes, unknown types) falls
- * back to the existing passthrough behavior, returning undefined here.
+ * Built-ins go through the shared registry as before. Any custom node
+ * (calculation, expression, or composite kind) with author-declared
+ * `outputColumns` gets a CustomCalcSchemaNode built from that declaration, so
+ * added/removed/passthrough columns actually propagate downstream — the gap
+ * plain custom nodes used to have. `keyBy` only exists on calculation-kind
+ * transforms; normalizeKeyBy safely no-ops (columns: [], mode: 'all') for the
+ * other two kinds, where it's simply undefined. Custom nodes with no declared
+ * outputColumns still fall back to the existing passthrough behavior,
+ * returning undefined here.
  */
 function createSchemaNodeForType(
   nodeType: string,
@@ -318,7 +321,7 @@ function createSchemaNodeForType(
 ) {
   if (isCustomType(nodeType)) {
     const def = useWorkflowStore.getState().customNodeDefs.find((d) => d.id === nodeType);
-    if (def?.kind === 'calculation' && def.outputColumns) {
+    if (def?.outputColumns) {
       return new CustomCalcSchemaNode(
         nodeId,
         def.outputColumns,

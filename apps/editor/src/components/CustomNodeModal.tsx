@@ -191,6 +191,10 @@ export function CustomNodeModal({ editing, onClose }: Props) {
       },
       outputColumns,
     };
+    // Expression-kind nodes declare only outputColumns (no params/transform —
+    // those are calculation-only); this is what lets the schema store build a
+    // CustomCalcSchemaNode for an expression node (see createSchemaNodeForType).
+    const expressionFields = { operation, expression: expression.trim(), settings, outputColumns };
     const def: CustomNodeDef = editing
       ? {
           ...editing,
@@ -201,7 +205,7 @@ export function CustomNodeModal({ editing, onClose }: Props) {
             ? {}
             : isCalculation
               ? calcFields
-              : { operation, expression: expression.trim(), settings }),
+              : expressionFields),
         }
       : {
           id: `${CUSTOM_NODE_PREFIX}${nanoid(8)}`,
@@ -211,7 +215,7 @@ export function CustomNodeModal({ editing, onClose }: Props) {
           kind,
           ...(isCalculation
             ? calcFields
-            : { operation, expression: expression.trim(), settings }),
+            : expressionFields),
           createdAt: new Date().toISOString(),
         };
     upsertCustomNode(def);
@@ -396,6 +400,14 @@ export function CustomNodeModal({ editing, onClose }: Props) {
                 )}
               </Section>
 
+              {/* ── Output columns ───────────────────────────────── */}
+              <OutputColumnsSection
+                outputColumns={outputColumns}
+                onAdd={addOutputColumn}
+                onUpdate={updateOutputColumn}
+                onRemove={removeOutputColumn}
+              />
+
               {/* ── Live preview ─────────────────────────────────── */}
               <Section title="Generated Beam transform">
                 <pre className="text-[13px] font-mono text-emerald-400 bg-muted/40 border border-border rounded-lg px-3.5 py-3 overflow-x-auto whitespace-pre leading-relaxed">
@@ -561,70 +573,12 @@ export function CustomNodeModal({ editing, onClose }: Props) {
               </Section>
 
               {/* ── Output columns ───────────────────────────────── */}
-              <Section
-                title="Output columns"
-                subtitle="declares the schema downstream nodes see"
-                action={
-                  <Button variant="ghost" size="xs" onClick={addOutputColumn} className="text-cyan-400 hover:text-cyan-300">
-                    <Plus /> Add
-                  </Button>
-                }
-              >
-                <div className="flex flex-col gap-2.5">
-                  {outputColumns.map((c, i) => (
-                    <div
-                      key={i}
-                      className="flex flex-wrap sm:flex-nowrap gap-2 items-center bg-muted/40 border border-border rounded-lg p-2"
-                    >
-                      <Select
-                        value={c.mode}
-                        onValueChange={(v) => updateOutputColumn(i, { mode: v as OutputColumnMode })}
-                      >
-                        <SelectTrigger className="w-full sm:w-44">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="passthrough-all">forward all input columns</SelectItem>
-                          <SelectItem value="passthrough">forward one input column</SelectItem>
-                          <SelectItem value="new">new column</SelectItem>
-                        </SelectContent>
-                      </Select>
-                      {c.mode !== 'passthrough-all' && (
-                        <Input
-                          value={c.name ?? ''}
-                          onChange={(e) => updateOutputColumn(i, { name: e.target.value })}
-                          placeholder="Column name"
-                          className="flex-1 min-w-[120px] font-mono"
-                        />
-                      )}
-                      {c.mode === 'new' && (
-                        <Select
-                          value={c.type ?? ColumnDataType.STRING}
-                          onValueChange={(v) => updateOutputColumn(i, { type: v as ColumnDataType })}
-                        >
-                          <SelectTrigger className="w-full sm:w-28">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {COLUMN_TYPES.map((t) => (
-                              <SelectItem key={t} value={t}>{t}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      )}
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        onClick={() => removeOutputColumn(i)}
-                        title="Remove column"
-                        className="flex-shrink-0 ml-auto text-muted-foreground hover:text-red-400 hover:bg-red-500/10"
-                      >
-                        <Trash2 />
-                      </Button>
-                    </div>
-                  ))}
-                </div>
-              </Section>
+              <OutputColumnsSection
+                outputColumns={outputColumns}
+                onAdd={addOutputColumn}
+                onUpdate={updateOutputColumn}
+                onRemove={removeOutputColumn}
+              />
 
               {/* ── Live preview ─────────────────────────────────── */}
               <Section title="Generated Beam transform">
@@ -682,6 +636,90 @@ function Section({
       </div>
       <div className="flex flex-col gap-4">{children}</div>
     </section>
+  );
+}
+
+/**
+ * The "Output columns" editor — shared between calculation-kind and
+ * expression-kind nodes so both declare their output schema the same way
+ * (see CustomCalcSchemaNode, which consumes this declaration for any kind).
+ */
+function OutputColumnsSection({
+  outputColumns,
+  onAdd,
+  onUpdate,
+  onRemove,
+}: {
+  outputColumns: OutputColumnDecl[];
+  onAdd: () => void;
+  onUpdate: (i: number, patch: Partial<OutputColumnDecl>) => void;
+  onRemove: (i: number) => void;
+}) {
+  return (
+    <Section
+      title="Output columns"
+      subtitle="declares the schema downstream nodes see"
+      action={
+        <Button variant="ghost" size="xs" onClick={onAdd} className="text-cyan-400 hover:text-cyan-300">
+          <Plus /> Add
+        </Button>
+      }
+    >
+      <div className="flex flex-col gap-2.5">
+        {outputColumns.map((c, i) => (
+          <div
+            key={i}
+            className="flex flex-wrap sm:flex-nowrap gap-2 items-center bg-muted/40 border border-border rounded-lg p-2"
+          >
+            <Select
+              value={c.mode}
+              onValueChange={(v) => onUpdate(i, { mode: v as OutputColumnMode })}
+            >
+              <SelectTrigger className="w-full sm:w-44">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="passthrough-all">forward all input columns</SelectItem>
+                <SelectItem value="passthrough">forward one input column</SelectItem>
+                <SelectItem value="new">new column</SelectItem>
+              </SelectContent>
+            </Select>
+            {c.mode !== 'passthrough-all' && (
+              <Input
+                value={c.name ?? ''}
+                onChange={(e) => onUpdate(i, { name: e.target.value })}
+                placeholder="Column name"
+                className="flex-1 min-w-[120px] font-mono"
+              />
+            )}
+            {c.mode === 'new' && (
+              <Select
+                value={c.type ?? ColumnDataType.STRING}
+                onValueChange={(v) => onUpdate(i, { type: v as ColumnDataType })}
+              >
+                <SelectTrigger className="w-full sm:w-28">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {COLUMN_TYPES.map((t) => (
+                    <SelectItem key={t} value={t}>{t}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={() => onRemove(i)}
+              title="Remove column"
+              className="flex-shrink-0 ml-auto text-muted-foreground hover:text-red-400 hover:bg-red-500/10"
+            >
+              <Trash2 />
+            </Button>
+          </div>
+        ))}
+      </div>
+    </Section>
   );
 }
 

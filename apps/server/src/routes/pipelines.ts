@@ -15,7 +15,7 @@ import { buildIR, optimizeIR, validateIR } from '@beamflow/ir';
 import type { SubflowResolver } from '@beamflow/ir';
 import { generatePythonBeam } from '@beamflow/beam-generator';
 import { executePipeline, LocalFeatherStorage, PreviewCacheManager, PreviewManager } from '@beamflow/execution';
-import { generateId, timestamp, SCHEMA_VERSION, resolveSubflowOutputs } from '@beamflow/shared';
+import { generateId, timestamp, SCHEMA_VERSION, resolveSubflowOutputs, deriveAutoParameters, mergeSubflowParameters } from '@beamflow/shared';
 import type { SerializedWorkflow, PreviewRowsResponse } from '@beamflow/shared';
 import type { IStorage } from '../storage.js';
 import { projectsRepo } from '../db/repositories/projects.repo.js';
@@ -483,14 +483,20 @@ export async function pipelineRoutes(
         const fullyExpandedSubflow = await flattenSubflowsForPreview(subflowWf, orgId, depth + 1);
 
         const prefix = `sub_${subflowNode.id}_`;
+        // Live-merged: stored metadata.parameters + a fresh derivation from
+        // the subflow's current nodes, so a subflow saved before auto-params
+        // existed still substitutes a value filled at the parent (matches
+        // the editor's live schema-store and the IR builder).
+        const effectiveParams = mergeSubflowParameters(
+          fullyExpandedSubflow.metadata?.parameters ?? [],
+          deriveAutoParameters(fullyExpandedSubflow.nodes, (t) => registry.get(t)?.settings),
+        );
         const mappedNodes = fullyExpandedSubflow.nodes.map(n => {
           // Substitute parameters!
           const mappedSettings = { ...n.settings };
-          if (fullyExpandedSubflow.metadata?.parameters) {
-            for (const param of fullyExpandedSubflow.metadata.parameters) {
-              if (param.targetNodeId === n.id && subflowNode.settings && param.id in subflowNode.settings) {
-                mappedSettings[param.targetSettingKey] = subflowNode.settings[param.id];
-              }
+          for (const param of effectiveParams) {
+            if (param.targetNodeId === n.id && subflowNode.settings && param.id in subflowNode.settings) {
+              mappedSettings[param.targetSettingKey] = subflowNode.settings[param.id];
             }
           }
           return {

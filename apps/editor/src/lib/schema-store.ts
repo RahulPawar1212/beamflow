@@ -36,7 +36,9 @@ import type {
 import { registerBuiltinSchemaNodes } from '@beamflow/nodes';
 import { resolveSubflowOutputs, resolveSubflowInputBoundary, validateGraphStructure } from '@beamflow/shared';
 import { useWorkflowStore } from '../store/workflow-store';
-import { isCustomType } from '../customNodes';
+import { isCustomType, normalizeKeyBy } from '../customNodes';
+import { CustomCalcSchemaNode } from './custom-calc-schema';
+import { effectiveSubflowParameters } from './subflow-params';
 import { trace } from './trace';
 
 // ─── One-time registration of built-in schema node factories ─────────────────
@@ -163,16 +165,23 @@ function expandNodesAndEdgesForSchema(
     }
 
     const prefix = `sub_${subflowNode.id}_`;
-    
+
+    // Live-merged: stored metadata.parameters + a fresh derivation from the
+    // subflow's current nodes (see subflow-params.ts) — a subflow saved
+    // before auto-params existed, or edited without a re-save, still
+    // substitutes and validates identically to a freshly-saved one.
+    const effectiveParams = effectiveSubflowParameters(
+      subflowDef,
+      (t) => useWorkflowStore.getState().nodeDefinitions.find((d) => d.type === t)?.settings,
+    );
+
     // Map internal nodes
     const internalNodes = subflowDef.nodes.map((n: any) => {
       // Substitute parameters!
       const mappedSettings = { ...n.settings };
-      if (subflowDef.metadata?.parameters) {
-        for (const param of subflowDef.metadata.parameters) {
-          if (param.targetNodeId === n.id && subflowNode.settings && param.id in subflowNode.settings) {
-            mappedSettings[param.targetSettingKey] = subflowNode.settings[param.id];
-          }
+      for (const param of effectiveParams) {
+        if (param.targetNodeId === n.id && subflowNode.settings && param.id in subflowNode.settings) {
+          mappedSettings[param.targetSettingKey] = subflowNode.settings[param.id];
         }
       }
       return {
@@ -181,6 +190,23 @@ function expandNodesAndEdgesForSchema(
         settings: mappedSettings,
       };
     });
+
+    // Required subflow parameters (auto-derived or manually flagged) that have
+    // no value on the proxy: the inner setting stays empty, so Generate/Execute
+    // would fail — surface it NOW as an error badge on the proxy node via the
+    // same subflowIssues → NodeIssueBadge pipeline the boundary checks use.
+    for (const param of effectiveParams) {
+      if (!param.required) continue;
+      const v = subflowNode.settings?.[param.id];
+      const empty = v === undefined || v === null || (typeof v === 'string' && v.trim() === '');
+      if (empty) {
+        addSubflowIssue(subflowNode.id, {
+          severity: 'error' as any,
+          nodeId: subflowNode.id,
+          message: `Subflow parameter "${param.name}" is required but has no value. Set it in the node's properties.`,
+        } as SchemaValidationIssue);
+      }
+    }
 
     // Map internal edges
     const internalEdges = subflowDef.connections.map((c: any) => ({
@@ -276,6 +302,35 @@ function expandNodesAndEdgesForSchema(
   return { expandedNodes, expandedEdges, subflowIssues };
 }
 
+/**
+ * Create the ISchemaNode for a workflow node, given its resolved node type.
+ * Built-ins go through the shared registry as before. Calculation-kind
+ * custom nodes (`kind: 'calculation'`) get a CustomCalcSchemaNode built from
+ * their author-declared `outputColumns`, so added/removed/passthrough
+ * columns actually propagate — the gap plain custom nodes still have.
+ * Everything else (expression/composite custom nodes, unknown types) falls
+ * back to the existing passthrough behavior, returning undefined here.
+ */
+function createSchemaNodeForType(
+  nodeType: string,
+  nodeId: string,
+  settings: Record<string, unknown>,
+) {
+  if (isCustomType(nodeType)) {
+    const def = useWorkflowStore.getState().customNodeDefs.find((d) => d.id === nodeType);
+    if (def?.kind === 'calculation' && def.outputColumns) {
+      return new CustomCalcSchemaNode(
+        nodeId,
+        def.outputColumns,
+        settings,
+        normalizeKeyBy(def.transform?.keyBy),
+      );
+    }
+    return undefined;
+  }
+  return schemaNodeRegistry.create(nodeType, nodeId, settings);
+}
+
 export const useSchemaStore = create<SchemaStoreState>((set, get) => {
   // Subscribe to engine change events and update the Zustand store
   engine.subscribe((event: SchemaChangeEvent) => {
@@ -285,7 +340,7 @@ export const useSchemaStore = create<SchemaStoreState>((set, get) => {
       ? 'system:subflow' 
       : (nodeTypeMap.get(event.nodeId) ?? '');
 
-    const schemaNode = schemaNodeRegistry.create(
+    const schemaNode = createSchemaNodeForType(
       actualNodeType,
       event.nodeId,
       nodeSettingsMap.get(event.nodeId) ?? {},
@@ -380,7 +435,7 @@ export const useSchemaStore = create<SchemaStoreState>((set, get) => {
           continue;
         }
 
-        const schemaNode = schemaNodeRegistry.create(node.nodeType, node.id, node.settings);
+        const schemaNode = createSchemaNodeForType(node.nodeType, node.id, node.settings);
         if (schemaNode) {
           engine.registerNode(schemaNode);
         } else {

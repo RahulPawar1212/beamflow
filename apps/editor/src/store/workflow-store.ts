@@ -26,6 +26,12 @@ import {
 import { api, ConflictError } from '../api/client';
 import { useSchemaStore } from '../lib/schema-store';
 import { trace } from '../lib/trace';
+import {
+  type ISubflowParameter,
+  deriveAutoParameters,
+  mergeSubflowParameters,
+  isAutoParamId,
+} from '@beamflow/shared';
 
 // ─── Types ──────────────────────────────────────────────────────────
 
@@ -62,7 +68,7 @@ export interface NavigationStackEntry {
   pipelineId: string | null;
   pipelineName: string;
   isSubflow: boolean;
-  pipelineParameters: Array<{ id: string; name: string; type: string; targetNodeId: string; targetSettingKey: string; }>;
+  pipelineParameters: ISubflowParameter[];
   nodes: Node<NodeData>[];
   edges: Edge[];
   history: HistoryEntry[];
@@ -74,7 +80,7 @@ interface WorkflowState {
   pipelineId: string | null;
   pipelineName: string;
   isSubflow: boolean;
-  pipelineParameters: Array<{ id: string; name: string; type: string; targetNodeId: string; targetSettingKey: string; }>;
+  pipelineParameters: ISubflowParameter[];
   // Optimistic-concurrency token: the version this document was loaded at. Sent
   // on save so the server can 409 if a teammate saved first. Bumped from the
   // server's response on a successful save. undefined for never-saved docs.
@@ -215,7 +221,17 @@ interface WorkflowState {
 
   // Subflow Navigation
   enterSubflow: (subflow: SerializedWorkflowDTO) => void;
-  exitSubflow: () => void;
+  /**
+   * Async: if the subflow being left has unsaved edits, they are saved and
+   * AWAITED before the parent state is restored. Without this, a value filled
+   * inside the subflow right before navigating back could still be in flight
+   * (debounced auto-save) when refreshSubflowCache(true) re-fetches — the
+   * parent would then see the stale, still-empty inner setting and keep
+   * showing a now-satisfied required parameter. Callers awaiting exitSubflow()
+   * (or looping it for multi-level "back") get a guarantee the parent's view
+   * reflects what was actually just filled in.
+   */
+  exitSubflow: () => Promise<void>;
 
   // Subflow Schema Cache
   subflowCache: Record<string, SerializedWorkflowDTO>;
@@ -682,6 +698,14 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       });
     }
 
+    // Auto-expose required-but-unfilled inner settings as subflow parameters,
+    // so the new proxy node immediately asks for exactly what the subflow
+    // can't run without (see @beamflow/shared deriveAutoParameters).
+    const autoParams = deriveAutoParameters(
+      subNodes,
+      (t) => state.nodeDefinitions.find((d) => d.type === t)?.settings,
+    );
+
     // Save the subflow to the DB
     let createdSubflow;
     try {
@@ -691,6 +715,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
         // Subflows are project-scoped: the new subflow joins the current project's
         // library so it's offered by the picker alongside this workflow.
         projectId: state.currentProjectId ?? undefined,
+        parameters: autoParams,
         nodes: subNodes,
         connections: subConnections,
       });
@@ -933,7 +958,24 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
         createdAt: state.pipelineCreatedAt ?? now,
         updatedAt: state.pipelineUpdatedAt ?? now,
         isSubflow: state.isSubflow,
-        parameters: state.pipelineParameters,
+        // Subflow saves self-heal their parameter list: auto params (required-
+        // but-unfilled inner settings) are re-derived from the current graph on
+        // every serialization — newly-emptied settings gain a param, filled or
+        // deleted ones drop theirs. Manual (param_*) exposures pass through
+        // untouched; merge dedupes by target so they always win.
+        parameters: state.isSubflow
+          ? mergeSubflowParameters(
+              state.pipelineParameters,
+              deriveAutoParameters(
+                state.nodes.map((n) => ({
+                  id: n.id,
+                  type: n.data.nodeType,
+                  settings: n.data.settings,
+                })),
+                (t) => state.nodeDefinitions.find((d) => d.type === t)?.settings,
+              ),
+            )
+          : state.pipelineParameters,
         // The concurrency token: the version this doc was loaded at. The server
         // 409s if the stored version has moved on. undefined for a new doc.
         version: state.pipelineVersion,
@@ -1130,13 +1172,22 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     get().loadWorkflow(subflow, false);
   },
 
-  exitSubflow: () => {
+  exitSubflow: async () => {
     trace.action('exitSubflow', { depth: get().navigationStack.length });
     const state = get();
     if (state.navigationStack.length === 0) return;
 
+    // Persist any edits made inside this subflow BEFORE leaving it — e.g. the
+    // user just filled a required inner setting to satisfy a subflow
+    // parameter. Awaited (not debounced) so the fetch below is guaranteed to
+    // see it, not a stale pre-edit copy racing the 2s auto-save.
+    if (state.isDirty && state.pipelineId) {
+      await state.saveWorkflow();
+    }
+
     // 1. Pop the last entry
-    const stack = [...state.navigationStack];
+    const postSaveState = get();
+    const stack = [...postSaveState.navigationStack];
     const parentEntry = stack.pop()!;
 
     // 2. Restore state
@@ -1156,8 +1207,10 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
 
     // Restoring the parent graph changes the fingerprint → central resync.
     // Force-refresh the subflow cache so the parent picks up edits made inside
-    // the child; the cache bump drives a second resync.
-    get().refreshSubflowCache(true);
+    // the child (now guaranteed persisted above); the cache bump drives a
+    // second resync. Awaited so a caller looping exitSubflow() for a
+    // multi-level "back" navigates each level only once this one has landed.
+    await get().refreshSubflowCache(true);
   },
 
   togglePipelineParameter: (targetNodeId, targetSettingKey, settingDef) => {
@@ -1168,6 +1221,14 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
 
     let newParams;
     if (existing >= 0) {
+      // Removing an auto-derived param is allowed but futile: it exists because
+      // the setting is required and unfilled, so the next save re-derives it.
+      if (isAutoParamId(state.pipelineParameters[existing].id)) {
+        state.addToast(
+          'info',
+          'This setting is required and unfilled — the parameter will be re-exposed on save.',
+        );
+      }
       newParams = state.pipelineParameters.filter((_, i) => i !== existing);
     } else {
       // Map SettingType to ISubflowParameter type
@@ -1176,12 +1237,17 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       if (settingDef.type === 'boolean') type = 'boolean';
       if (settingDef.type === 'select' || settingDef.type === 'multi-select') type = 'enum';
 
-      const newParam = {
+      const newParam: ISubflowParameter = {
         id: `param_${nanoid(6)}`,
         name: settingDef.label,
         type,
         targetNodeId,
         targetSettingKey,
+        // Carried so the parent panel can render the required marker and real
+        // enum options for manually exposed params too.
+        required: settingDef.validation?.some((v: { type: string }) => v.type === 'required') ?? false,
+        options: settingDef.options,
+        defaultValue: settingDef.defaultValue,
       };
       newParams = [...state.pipelineParameters, newParam];
     }

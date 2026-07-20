@@ -182,6 +182,76 @@ describe('Beam Generator Package', () => {
       expect(generated.code).toContain("MapExprTransform(expression='element[\\'x\\'] * 2')");
     });
 
+    it('emits a PTransform+DoFn class for a calculation-kind custom node (PyTransform), without keying', () => {
+      const pipeline = {
+        id: 'p', name: 'P', version: '1.0.0',
+        steps: [
+          { id: 'src', label: 'Source', type: IRStepType.Read, operation: 'ReadFromCSV', params: { filePath: 'a.csv' }, inputs: [], imports: [] },
+          {
+            id: 'custom_calc', label: 'Add Total', type: IRStepType.Transform, operation: 'PyTransform',
+            params: { processBody: "result = dict(element)\nresult['total'] = element['price'] * element['qty']\nyield result", keyBy: [] },
+            inputs: ['src'], imports: [],
+          },
+        ],
+        connections: [],
+      };
+      const generated = generatePythonBeam(pipeline as any);
+      expect(generated.code.match(/class _Fn\(beam\.DoFn\):/g)?.length).toBe(1);
+      expect(generated.code).toContain('def process(self, element):');
+      expect(generated.code).toContain("result['total'] = element['price'] * element['qty']");
+      expect(generated.code).toContain('beam.ParDo(self._Fn())');
+      expect(generated.code).not.toContain('GroupByKey');
+      expect(generated.code).not.toContain('No handler for operation');
+    });
+
+    it('emits GroupByKey wiring for a calculation node with keyBy set', () => {
+      const pipeline = {
+        id: 'p', name: 'P', version: '1.0.0',
+        steps: [
+          { id: 'src', label: 'Source', type: IRStepType.Read, operation: 'ReadFromCSV', params: { filePath: 'a.csv' }, inputs: [], imports: [] },
+          {
+            id: 'custom_csi', label: 'CSI', type: IRStepType.Transform, operation: 'PyTransform',
+            params: { processBody: "total = sum(r['Value'] for r in records)\nyield {'GroupByKey': key, 'Value': total}", keyBy: ['TargetGroupId'] },
+            inputs: ['src'], imports: [],
+          },
+        ],
+        connections: [],
+      };
+      const generated = generatePythonBeam(pipeline as any);
+      expect(generated.code).toContain("def process(self, key_records):");
+      expect(generated.code).toContain('key, records = key_records');
+      expect(generated.code).toContain("element.get('TargetGroupId')");
+      expect(generated.code).toContain("beam.GroupByKey()");
+    });
+
+    it('emits ordered fallback keying + runtime guard for keyByMode first-present', () => {
+      const pipeline = {
+        id: 'p', name: 'P', version: '1.0.0',
+        steps: [
+          { id: 'src', label: 'Source', type: IRStepType.Read, operation: 'ReadFromCSV', params: { filePath: 'a.csv' }, inputs: [], imports: [] },
+          {
+            id: 'custom_csi', label: 'CSI', type: IRStepType.Transform, operation: 'PyTransform',
+            params: {
+              processBody: "yield {'GroupByKey': key, 'Value': len(list(records))}",
+              keyBy: ['TargetGroupId', 'QuestionId'],
+              keyByMode: 'first-present',
+            },
+            inputs: ['src'], imports: [],
+          },
+        ],
+        connections: [],
+      };
+      const generated = generatePythonBeam(pipeline as any);
+      // Priority-list key function: try TargetGroupId first, then QuestionId.
+      expect(generated.code).toContain("for col in ['TargetGroupId', 'QuestionId']:");
+      expect(generated.code).toContain('def _key_fn(element):');
+      // Runtime guard when none of the candidates are present (cortex parity).
+      expect(generated.code).toContain('raise ValueError');
+      expect(generated.code).toContain('beam.GroupByKey()');
+      // The tuple-of-all-columns form must NOT be used in this mode.
+      expect(generated.code).not.toContain("tuple(element.get('TargetGroupId'), element.get('QuestionId'))");
+    });
+
     it('reuses one class across multiple instances with different kwargs', () => {
       const pipeline = {
         id: 'two_filters',

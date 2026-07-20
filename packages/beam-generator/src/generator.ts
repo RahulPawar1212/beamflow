@@ -635,6 +635,23 @@ function collectClassPlans(pipeline: IRPipeline, plan: ClassPlan, usedNames: Set
       continue;
     }
 
+    if (step.operation === 'PyTransform') {
+      // Each PyTransform step embeds its own author-written processBody
+      // literally in the class (unlike other leaf ops, the body isn't a
+      // shared-class kwarg) — so it gets one class per STEP, keyed by id,
+      // never reused across instances even if two steps share an operation
+      // name.
+      const key = `__py_transform_${step.id}`;
+      if (!plan.has(key)) {
+        const className = uniqueClassName(step.label || 'PyTransform', usedNames);
+        plan.set(key, {
+          className,
+          emitClass: (emitter) => emitPyTransformClass(className, step, emitter),
+        });
+      }
+      continue;
+    }
+
     if (operationHandlers.has(step.operation)) {
       const key = step.operation;
       if (!plan.has(key)) {
@@ -667,6 +684,19 @@ function emitStepInstantiation(step: IRStep, emitter: PythonEmitter, ctx: Genera
     emitter.blank();
     emitter.comment(`Subflow: ${step.label}`);
     emitter.line(`${varName} = ${inputExpr} | '${stepLabelName(step.label, step.id)}' >> ${entry.className}(${kwargs})`);
+    return;
+  }
+
+  if (step.operation === 'PyTransform') {
+    const key = `__py_transform_${step.id}`;
+    const entry = ctx.classPlan.get(key)!;
+    const inputVar = getInputVar(step, ctx);
+    emitter.blank();
+    emitter.comment(`${step.label}`);
+    emitter.line(`${varName} = ${inputVar} | '${stepLabelName(step.label, step.id)}' >> ${entry.className}()`);
+    for (const imp of step.imports) {
+      addStepImport(emitter, imp);
+    }
     return;
   }
 
@@ -859,6 +889,101 @@ function emitCompositeClass(
     emitter.line(`return {${entries.join(', ')}}`);
   }
 
+  emitter.dedent();
+  emitter.dedent();
+}
+
+/**
+ * Emit an author-written multi-line Python body at the emitter's current
+ * indentation. The body's own leading whitespace (common to every non-blank
+ * line) is stripped first, so authors can write naturally-indented Python in
+ * the editor's textarea without it colliding with the surrounding class
+ * indentation.
+ */
+function emitPythonBody(body: string, emitter: PythonEmitter): void {
+  const rawLines = body.replace(/\r\n/g, '\n').split('\n');
+  const nonBlank = rawLines.filter((l) => l.trim().length > 0);
+  const commonIndent = nonBlank.length
+    ? Math.min(...nonBlank.map((l) => l.match(/^ */)?.[0].length ?? 0))
+    : 0;
+  for (const raw of rawLines) {
+    if (raw.trim().length === 0) {
+      emitter.blank();
+    } else {
+      emitter.line(raw.slice(commonIndent));
+    }
+  }
+}
+
+/**
+ * Emit one PyTransform (user-authored calculation node) step's class. This is
+ * the generic seam for cortex-style "calculation nodes": the author supplies
+ * the DoFn.process() body (and optionally a group-by key) via the custom
+ * node modal; everything else — PTransform/DoFn scaffolding, keying,
+ * grouping — is generated here so the author only writes the row/group logic.
+ */
+function emitPyTransformClass(className: string, step: IRStep, emitter: PythonEmitter): void {
+  emitter.addImport('apache_beam as beam');
+  const keyBy = (step.params.keyBy as string[] | undefined) ?? [];
+  // 'all' (default): composite key of every listed column.
+  // 'first-present': the columns are an ordered priority list — the first one
+  // with a non-null value keys the record; none present → ValueError at
+  // runtime (cortex's TargetGroupId-else-QuestionId fallback pattern).
+  const keyByMode = (step.params.keyByMode as string) ?? 'all';
+  const processBody = (step.params.processBody as string) || 'yield element';
+
+  emitter.blank();
+  emitter.line(`class ${className}(beam.PTransform):`);
+  emitter.indent();
+  emitter.line(`class _Fn(beam.DoFn):`);
+  emitter.indent();
+  if (keyBy.length > 0) {
+    emitter.line(`def process(self, key_records):`);
+    emitter.indent();
+    emitter.line(`key, records = key_records`);
+    emitPythonBody(processBody, emitter);
+    emitter.dedent();
+  } else {
+    emitter.line(`def process(self, element):`);
+    emitter.indent();
+    emitPythonBody(processBody, emitter);
+    emitter.dedent();
+  }
+  emitter.dedent(); // end _Fn
+  emitter.blank();
+
+  emitter.line(`def expand(self, pcoll):`);
+  emitter.indent();
+  if (keyBy.length > 0) {
+    const pyList = `[${keyBy.map((c) => `'${toPythonString(c)}'`).join(', ')}]`;
+    if (keyByMode === 'first-present') {
+      // Ordered fallback keying with a runtime guard, matching cortex's
+      // KeyByTargetGroupOrQuestionIdDoFn semantics.
+      emitter.line(`def _key_fn(element):`);
+      emitter.indent();
+      emitter.line(`for col in ${pyList}:`);
+      emitter.indent();
+      emitter.line(`value = element.get(col)`);
+      emitter.line(`if value is not None:`);
+      emitter.indent();
+      emitter.line(`return value`);
+      emitter.dedent();
+      emitter.dedent();
+      emitter.line(`raise ValueError('No group key found in record: none of ' + str(${pyList}) + ' present')`);
+      emitter.dedent();
+      emitter.line(`keyed = pcoll | 'KeyBy' >> beam.Map(lambda element: (_key_fn(element), element))`);
+    } else {
+      const keyExpr =
+        keyBy.length === 1
+          ? `element.get('${toPythonString(keyBy[0])}')`
+          : `tuple(element.get('${keyBy.map(toPythonString).join("'), element.get('")}'))`;
+      emitter.line(`keyed = pcoll | 'KeyBy' >> beam.Map(lambda element: (${keyExpr}, element))`);
+    }
+    emitter.line(`grouped = keyed | 'GroupByKey' >> beam.GroupByKey()`);
+    emitter.line(`return grouped | 'Calculate' >> beam.ParDo(self._Fn())`);
+  } else {
+    emitter.line(`return pcoll | 'Calculate' >> beam.ParDo(self._Fn())`);
+  }
   emitter.dedent();
   emitter.dedent();
 }

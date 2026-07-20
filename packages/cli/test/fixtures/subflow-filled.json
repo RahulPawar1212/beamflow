@@ -1,0 +1,38 @@
+{
+  "schemaVersion": "1.0.0",
+  "metadata": {
+    "id": "sf_filled",
+    "name": "filled subflow",
+    "isSubflow": true,
+    "createdAt": "2026-01-01T00:00:00.000Z",
+    "updatedAt": "2026-01-01T00:00:00.000Z",
+    "parameters": []
+  },
+  "nodes": [
+    {
+      "id": "sub_in",
+      "type": "system:subflow-input",
+      "settings": { "inputName": "Input 1" },
+      "position": { "x": 0, "y": 0 },
+      "label": "Input 1"
+    },
+    {
+      "id": "inner_filter",
+      "type": "beamflow:filter",
+      "settings": { "field": "age", "operator": "==", "value": "18" },
+      "position": { "x": 200, "y": 0 },
+      "label": "Filter"
+    },
+    {
+      "id": "sub_out",
+      "type": "system:subflow-output",
+      "settings": { "outputName": "Output 1" },
+      "position": { "x": 400, "y": 0 },
+      "label": "Output 1"
+    }
+  ],
+  "connections": [
+    { "id": "e1", "sourceNodeId": "sub_in", "sourcePortId": "out", "targetNodeId": "inner_filter", "targetPortId": "in" },
+    { "id": "e2", "sourceNodeId": "inner_filter", "sourcePortId": "out", "targetNodeId": "sub_out", "targetPortId": "in" }
+  ]
+}

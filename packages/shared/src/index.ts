@@ -23,6 +23,7 @@ export {
   type INodeInstance,
   type InlineIRStep,
   type IConnection,
+  type ISubflowParameter,
   type IWorkflowMetadata,
   type IProject,
   type IOrganization,
@@ -61,6 +62,21 @@ export type {
   SubflowOutputResolution,
   SubflowInputBoundaryResolution,
 } from './subflow-outputs.js';
+
+// Auto-derived subflow parameters (required-but-unfilled inner settings) —
+// derived at subflow creation + on every subflow save (see editor workflow-store).
+export {
+  deriveAutoParameters,
+  mergeSubflowParameters,
+  effectiveSubflowParameters,
+  isAutoParamId,
+} from './subflow-auto-params.js';
+export type {
+  AutoParamNodeLite,
+  AutoParamSettingLite,
+  SettingDefsLookup,
+  SubflowDocLite,
+} from './subflow-auto-params.js';
 
 // Structural graph validation (orphan nodes, unconnected required ports) —
 // shared by DAG.validate() (packages/graph) and the editor's live canvas check.

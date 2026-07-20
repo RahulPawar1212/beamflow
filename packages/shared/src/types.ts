@@ -308,7 +308,17 @@ export interface IMembership {
   readonly createdAt: string;
 }
 
-/** Definition of a parameter exposed from a subflow's internal node. */
+/**
+ * Definition of a parameter exposed from a subflow's internal node.
+ *
+ * Two id conventions coexist:
+ *  - `param_<nanoid>` — manually exposed via the link toggle in the editor.
+ *  - `auto_<nodeId>_<settingKey>` — auto-derived because the target setting is
+ *    required but unfilled inside the subflow (see shared
+ *    `deriveAutoParameters`). Auto params are re-derived on every subflow
+ *    save, never carried over, so their deterministic ids keep parent-side
+ *    values (`proxySettings[param.id]`) stable across saves.
+ */
 export interface ISubflowParameter {
   /** Unique parameter ID, e.g. param_1 */
   readonly id: string;
@@ -320,6 +330,12 @@ export interface ISubflowParameter {
   readonly targetNodeId: string;
   /** The setting key on the internal node */
   readonly targetSettingKey: string;
+  /** Whether the target setting is required (drives parent-side validation). */
+  readonly required?: boolean;
+  /** Choices for enum params, copied from the target setting definition. */
+  readonly options?: ReadonlyArray<{ label: string; value: string }>;
+  /** The target setting definition's default value (display/prefill hint). */
+  readonly defaultValue?: unknown;
 }
 
 /** Complete workflow document (nodes + connections + metadata). */

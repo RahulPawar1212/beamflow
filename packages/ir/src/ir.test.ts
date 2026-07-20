@@ -51,6 +51,36 @@ const testNodeDefB = {
   validate: () => [],
 };
 
+// Like testNodeDefB, but declares a REQUIRED `condition` setting — used to
+// exercise live auto-param derivation (deriveAutoParameters) for a subflow
+// document whose metadata.parameters was never populated (a pre-feature save).
+const testNodeDefRequiredFilter = {
+  type: 'test:required-filter',
+  name: 'TestRequiredFilter',
+  description: '',
+  category: NodeCategory.Transform,
+  icon: '',
+  version: '1.0.0',
+  ports: [
+    { id: 'in', name: 'in', direction: PortDirection.Input, dataType: DataType.Record, required: true },
+    { id: 'out', name: 'out', direction: PortDirection.Output, dataType: DataType.Record, required: false },
+  ],
+  settings: [
+    {
+      key: 'condition',
+      label: 'Condition',
+      type: SettingType.Text,
+      validation: [{ type: 'required' as const, message: 'Condition is required.' }],
+    },
+  ],
+  toIR: (settings: any) => ({
+    stepType: IRStepType.Transform,
+    operation: 'Filter',
+    params: { condition: settings.condition },
+  }),
+  validate: () => [],
+};
+
 // ── Minimal stand-ins for the real @beamflow/nodes system node defs ─────────
 // (packages/ir doesn't depend on @beamflow/nodes; these mirror the real
 // toIR() shapes for system:subflow / -input / -output closely enough to
@@ -117,6 +147,12 @@ function makeRegistryWithSubflowSystemNodes() {
   registry.register(testSubflowProxyDef);
   registry.register(testSubflowInputDef);
   registry.register(testSubflowOutputDef);
+  return registry;
+}
+
+function makeRegistryWithRequiredFilter() {
+  const registry = makeRegistryWithSubflowSystemNodes();
+  registry.register(testNodeDefRequiredFilter);
   return registry;
 }
 
@@ -248,6 +284,58 @@ describe('IR Package', () => {
         },
       ]);
       expect(composite.compositeParamOverrides).toEqual({ param_1: '7' });
+
+      const errors = validateIR(ir);
+      expect(errors).toEqual([]);
+    });
+
+    it('live-derives a composite parameter for a required-empty inner setting even with NO stored metadata.parameters', () => {
+      // Simulates a subflow saved BEFORE auto-params existed: metadata.parameters
+      // is empty/absent, but the inner node has a required setting left unfilled.
+      // buildIR must still expose it (auto_<nodeId>_<key>) and honor an override
+      // from the proxy's own settings — matching the editor's live schema-store.
+      const registry = makeRegistryWithRequiredFilter();
+      const oldDoc: SerializedWorkflow = {
+        schemaVersion: SCHEMA_VERSION,
+        metadata: { id: 'sf_old', name: 'Pre-feature Subflow', createdAt: '', updatedAt: '', isSubflow: true },
+        nodes: [
+          { id: 'inner_input', type: 'system:subflow-input', settings: { inputName: 'Input 1' }, position: { x: 0, y: 0 } },
+          { id: 'inner_filter', type: 'test:required-filter', settings: { condition: '' }, position: { x: 100, y: 0 } },
+          { id: 'inner_output', type: 'system:subflow-output', settings: { outputName: 'Output 1' }, position: { x: 200, y: 0 } },
+        ],
+        connections: [
+          { id: 'e1', sourceNodeId: 'inner_input', sourcePortId: 'out', targetNodeId: 'inner_filter', targetPortId: 'in' },
+          { id: 'e2', sourceNodeId: 'inner_filter', sourcePortId: 'out', targetNodeId: 'inner_output', targetPortId: 'in' },
+        ],
+      };
+      const resolveSubflow: SubflowResolver = (id) => (id === 'sf_old' ? { workflow: oldDoc } : undefined);
+
+      const dag = new DAG();
+      dag.addNode({ id: 'src', type: 'test:source', settings: {}, position: { x: 0, y: 0 } });
+      dag.addNode({
+        id: 'proxy',
+        type: 'system:subflow',
+        // The proxy fills the live-derived param by its deterministic id —
+        // no prior save ever materialized this id anywhere.
+        settings: { subflowId: 'sf_old', auto_inner_filter_condition: 'y > 2' },
+        position: { x: 100, y: 0 },
+      });
+      dag.addEdge({ id: 'e1', sourceNodeId: 'src', sourcePortId: 'out', targetNodeId: 'proxy', targetPortId: 'in' });
+
+      const ir = buildIR(dag, registry, { name: 'Parent', resolveSubflow });
+      const composite = ir.steps.find((s) => s.id === 'proxy')!;
+
+      expect(composite.compositeParams).toEqual([
+        {
+          id: 'auto_inner_filter_condition',
+          name: 'Condition',
+          type: 'string',
+          defaultValue: '',
+          targetStepId: 'inner_filter',
+          targetParamKey: 'condition',
+        },
+      ]);
+      expect(composite.compositeParamOverrides).toEqual({ auto_inner_filter_condition: 'y > 2' });
 
       const errors = validateIR(ir);
       expect(errors).toEqual([]);

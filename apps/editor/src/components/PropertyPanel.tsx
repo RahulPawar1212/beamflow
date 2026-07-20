@@ -8,8 +8,15 @@ import { createPortal } from 'react-dom';
 import { X, Settings2, Trash2, Plus, Database, UploadCloud, Loader2, Boxes, Link } from 'lucide-react';
 import { useWorkflowStore } from '../store/workflow-store';
 import { useSchemaStore } from '../lib/schema-store';
+import { effectiveSubflowParameters } from '../lib/subflow-params';
 import { api } from '../api/client';
 import type { NodeDef } from '../api/client';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from './ui/dialog';
 
 export function PropertyPanel() {
   const selectedNodeId = useWorkflowStore((s) => s.selectedNodeId);
@@ -59,11 +66,34 @@ export function PropertyPanel() {
   if (selectedNode.data.nodeType === 'system:subflow' && settings.subflowId) {
     const subflowCache = useWorkflowStore.getState().subflowCache;
     const subflowDef = subflowCache[settings.subflowId as string];
-    if (subflowDef?.metadata?.parameters) {
-      const paramSettings = subflowDef.metadata.parameters.map((p: any) => ({
+    if (subflowDef) {
+      // Live-merged: stored metadata.parameters + a fresh derivation from the
+      // subflow's current nodes, so a subflow saved before auto-params
+      // existed (or edited without a re-save) still surfaces them here.
+      const effectiveParams = effectiveSubflowParameters(
+        subflowDef,
+        (t) => nodeDefinitions.find((d) => d.type === t)?.settings,
+      );
+      const paramSettings = effectiveParams.map((p: any) => ({
         key: p.id,
         label: p.name,
-        type: p.type === 'enum' ? 'select' : p.type, // simplified for now
+        // ISubflowParameter.type ('string'|'number'|'boolean'|'enum') and the
+        // setting control's type ('text'|'number'|'boolean'|'select'|...) are
+        // DIFFERENT enums that only coincide for number/boolean. Mapping
+        // 'string' straight through used to leave it matching no control
+        // branch at all — the label/required marker rendered but the actual
+        // input never did, making the parameter look permanently unfillable.
+        type: p.type === 'enum' ? 'select' : p.type === 'string' ? 'text' : p.type,
+        // Real enum choices + required marker, carried on the parameter since
+        // the subflow's inner setting definitions aren't loaded here.
+        options: p.options,
+        placeholder: p.defaultValue != null ? String(p.defaultValue) : undefined,
+        validation: p.required
+          ? [{ type: 'required', message: `${p.name} is required` }]
+          : undefined,
+        // Select params must not silently display the first option as chosen
+        // when no value is set — render an explicit empty choice instead.
+        allowEmpty: true,
         group: 'Subflow Parameters',
       }));
       if (paramSettings.length > 0) {
@@ -492,25 +522,39 @@ function SettingControl({ nodeId, setting, value, onChange, inputColumns }: Sett
     ${isFixed ? 'opacity-60 cursor-not-allowed' : ''}`;
 
   const isColumnDropdown = (setting.key === 'field' || setting.key === 'aggregateField') && inputColumns.length > 0;
+  const isRequired = setting.validation?.some((v) => v.type === 'required') ?? false;
 
   return (
     <div>
       <label className="flex items-center gap-1 text-[11px] text-gray-400 mb-1 group">
         <span className="flex-1">{setting.label}</span>
-        {isSubflow && (
+        {/* Required settings are ALWAYS auto-exposed as a subflow parameter
+            whenever left empty (see deriveAutoParameters) — manual toggling
+            would be redundant (and confusing: un-toggling it does nothing,
+            since the next sync just re-derives it). The link icon is only
+            offered for settings the author wants to expose voluntarily. */}
+        {isSubflow && !isRequired && (
           <button
             onClick={() => togglePipelineParameter(nodeId, setting.key, setting)}
             title={isExposed ? "Remove parameter exposure" : "Expose as parameter on Subflow node"}
             className={`p-1 rounded transition-colors ${
-              isExposed 
-                ? 'text-amber-400 bg-amber-400/10 hover:bg-amber-400/20' 
+              isExposed
+                ? 'text-amber-400 bg-amber-400/10 hover:bg-amber-400/20'
                 : 'text-gray-500 opacity-0 group-hover:opacity-100 hover:text-amber-400 hover:bg-amber-400/10'
             }`}
           >
             <Link size={12} />
           </button>
         )}
-        {setting.validation?.some((v) => v.type === 'required') && (
+        {isSubflow && isRequired && (
+          <span
+            title="Required settings are automatically exposed as a subflow parameter whenever left empty — no need to link it manually."
+            className="text-[9px] px-1 py-0.5 rounded bg-indigo-500/10 text-indigo-300"
+          >
+            Auto
+          </span>
+        )}
+        {isRequired && (
           <span className="text-red-400">*</span>
         )}
         {isFixed && (
@@ -682,6 +726,12 @@ function SettingControl({ nodeId, setting, value, onChange, inputColumns }: Sett
           disabled={isFixed}
           className={baseInputClass}
         >
+          {/* Synthetic settings (subflow parameters) set allowEmpty so an
+              unset value renders as an explicit blank choice instead of
+              silently displaying the first option as if it were chosen. */}
+          {(setting as any).allowEmpty && (
+            <option value="">-- Select --</option>
+          )}
           {setting.options?.map((opt) => (
             <option key={opt.value} value={opt.value}>
               {opt.label}
@@ -696,10 +746,12 @@ function SettingControl({ nodeId, setting, value, onChange, inputColumns }: Sett
 }
 
 // ─── Subflow picker ────────────────────────────────────────────────
-// Searchable list of the user-global subflow library (reusable across every
-// project). Each row shows name + description + "used by N". Picking one sets
-// `subflowId` (→ refreshSubflowCache(true) → central schema-sync) and relabels
-// the on-canvas node. Excludes the currently-open workflow (no self-reference).
+// Compact collapsed row (current selection + a "Change" button) that opens a
+// modal containing the searchable list of the user-global subflow library
+// (reusable across every project). Each row shows name + description +
+// "used by N". Picking one sets `subflowId` (→ refreshSubflowCache(true) →
+// central schema-sync) and relabels the on-canvas node, then closes the
+// modal. Excludes the currently-open workflow (no self-reference).
 interface SubflowRow { id: string; name: string; description?: string; usedByCount?: number }
 
 function SubflowPicker({
@@ -715,91 +767,125 @@ function SubflowPicker({
   const currentPipelineId = useWorkflowStore((s) => s.pipelineId);
   const currentProjectId = useWorkflowStore((s) => s.currentProjectId);
   const updateNodeLabel = useWorkflowStore((s) => s.updateNodeLabel);
+  const [open, setOpen] = React.useState(false);
   const [subflows, setSubflows] = React.useState<SubflowRow[]>([]);
-  const [loading, setLoading] = React.useState(true);
+  const [loading, setLoading] = React.useState(false);
   const [query, setQuery] = React.useState('');
+  // The picker only knows the CURRENT subflow's name once the library has
+  // loaded at least once; cache the last-seen name so the collapsed row
+  // doesn't flash blank while the modal is closed and the list hasn't fetched.
+  const [selectedName, setSelectedName] = React.useState<string | null>(null);
 
+  // Fetch only while the modal is open — no need to hit the list endpoint on
+  // every panel mount just to render the collapsed row.
   React.useEffect(() => {
+    if (!open) return;
     let mounted = true;
+    setLoading(true);
     // Subflows are project-scoped: only offer ones from the current project.
     api
       .listSubflows(currentProjectId ?? undefined)
       .then((res) => {
         if (!mounted) return;
-        setSubflows(
-          res.pipelines
-            .filter((p) => p.id !== currentPipelineId) // no self-reference
-            .map((p) => ({ id: p.id, name: p.name, description: p.description, usedByCount: p.usedByCount })),
-        );
+        const rows = res.pipelines
+          .filter((p) => p.id !== currentPipelineId) // no self-reference
+          .map((p) => ({ id: p.id, name: p.name, description: p.description, usedByCount: p.usedByCount }));
+        setSubflows(rows);
         setLoading(false);
+        const current = rows.find((s) => s.id === value);
+        if (current) setSelectedName(current.name);
       })
       .catch(() => { if (mounted) setLoading(false); });
     return () => { mounted = false; };
-  }, [currentPipelineId, currentProjectId]);
+  }, [open, currentPipelineId, currentProjectId, value]);
 
   const filtered = query.trim()
     ? subflows.filter((s) =>
         s.name.toLowerCase().includes(query.toLowerCase()) ||
         (s.description ?? '').toLowerCase().includes(query.toLowerCase()))
     : subflows;
-  const selected = subflows.find((s) => s.id === value);
 
   const pick = (s: SubflowRow) => {
     onChange(s.id);
     updateNodeLabel(nodeId, s.name);
+    setSelectedName(s.name);
+    setOpen(false);
+    setQuery('');
   };
 
-  const inputCls = `w-full px-2.5 py-1.5 text-xs rounded-lg bg-[var(--color-surface-200)]
-    border border-[var(--color-border)] text-gray-300 placeholder-gray-600 outline-none
-    focus:border-indigo-500/50 transition-colors`;
-
   return (
-    <div className="flex flex-col gap-1.5">
-      {/* Current selection */}
-      {selected && (
-        <div className="text-[11px] text-indigo-300 bg-indigo-500/10 border border-indigo-500/20 rounded-md px-2 py-1">
-          Using: <span className="font-semibold">{selected.name}</span>
-        </div>
-      )}
-      <input
-        type="text"
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        placeholder="Search subflows…"
-        className={inputCls}
-      />
-      <div className="max-h-48 overflow-y-auto flex flex-col gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-100)] p-1">
-        {loading ? (
-          <div className="text-[11px] text-gray-500 px-2 py-2">Loading subflows…</div>
-        ) : filtered.length === 0 ? (
-          <div className="text-[11px] text-gray-500 px-2 py-2">
-            {subflows.length === 0 ? 'No subflows yet — create one with "Group as node".' : 'No matches.'}
+    <>
+      <div className="flex items-center gap-2">
+        {value && selectedName ? (
+          <div className="flex-1 min-w-0 text-[11px] text-indigo-300 bg-indigo-500/10 border border-indigo-500/20 rounded-md px-2 py-1 truncate">
+            Using: <span className="font-semibold">{selectedName}</span>
           </div>
         ) : (
-          filtered.map((s) => (
-            <button
-              key={s.id}
-              onClick={() => pick(s)}
-              className={`text-left px-2 py-1.5 rounded-md transition-colors ${
-                s.id === value
-                  ? 'bg-indigo-500/15 border border-indigo-500/30'
-                  : 'hover:bg-[var(--color-surface-200)] border border-transparent'
-              }`}
-            >
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-xs font-medium text-gray-200 truncate">{s.name}</span>
-                <span className="text-[10px] text-gray-500 shrink-0">
-                  {s.usedByCount ? `used by ${s.usedByCount}` : 'unused'}
-                </span>
-              </div>
-              {s.description && (
-                <div className="text-[10px] text-gray-500 truncate">{s.description}</div>
-              )}
-            </button>
-          ))
+          <div className="flex-1 min-w-0 text-[11px] text-gray-500 px-2 py-1">
+            {value ? 'Using: (loading…)' : 'No subflow selected'}
+          </div>
         )}
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className="shrink-0 text-[11px] font-medium px-2.5 py-1 rounded-md border border-[var(--color-border)]
+            text-gray-300 hover:bg-[var(--color-surface-200)] transition-colors"
+        >
+          {value ? 'Change' : 'Choose…'}
+        </button>
       </div>
-    </div>
+
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-w-md p-0 gap-0 max-h-[70vh] flex flex-col overflow-hidden">
+          <DialogHeader className="px-4 py-3 border-b border-border">
+            <DialogTitle className="text-[14px]">Choose a subflow</DialogTitle>
+          </DialogHeader>
+          <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-2">
+            <input
+              type="text"
+              autoFocus
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search subflows…"
+              className="w-full px-2.5 py-1.5 text-xs rounded-lg bg-[var(--color-surface-200)]
+                border border-[var(--color-border)] text-gray-300 placeholder-gray-600 outline-none
+                focus:border-indigo-500/50 transition-colors"
+            />
+            <div className="flex flex-col gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-100)] p-1">
+              {loading ? (
+                <div className="text-[11px] text-gray-500 px-2 py-2">Loading subflows…</div>
+              ) : filtered.length === 0 ? (
+                <div className="text-[11px] text-gray-500 px-2 py-2">
+                  {subflows.length === 0 ? 'No subflows yet — create one with "Group as node".' : 'No matches.'}
+                </div>
+              ) : (
+                filtered.map((s) => (
+                  <button
+                    key={s.id}
+                    onClick={() => pick(s)}
+                    className={`text-left px-2 py-1.5 rounded-md transition-colors ${
+                      s.id === value
+                        ? 'bg-indigo-500/15 border border-indigo-500/30'
+                        : 'hover:bg-[var(--color-surface-200)] border border-transparent'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-medium text-gray-200 truncate">{s.name}</span>
+                      <span className="text-[10px] text-gray-500 shrink-0">
+                        {s.usedByCount ? `used by ${s.usedByCount}` : 'unused'}
+                      </span>
+                    </div>
+                    {s.description && (
+                      <div className="text-[10px] text-gray-500 truncate">{s.description}</div>
+                    )}
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 

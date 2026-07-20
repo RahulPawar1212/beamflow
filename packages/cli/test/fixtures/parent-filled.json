@@ -1,0 +1,19 @@
+{
+  "schemaVersion": "1.0.0",
+  "metadata": {
+    "id": "parent_filled",
+    "name": "parent (filled subflow)",
+    "createdAt": "2026-01-01T00:00:00.000Z",
+    "updatedAt": "2026-01-01T00:00:00.000Z"
+  },
+  "nodes": [
+    {
+      "id": "sf",
+      "type": "system:subflow",
+      "settings": { "subflowId": "sf_filled" },
+      "position": { "x": 0, "y": 0 },
+      "label": "filled subflow"
+    }
+  ],
+  "connections": []
+}

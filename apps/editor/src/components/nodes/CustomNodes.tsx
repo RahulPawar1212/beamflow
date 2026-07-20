@@ -12,6 +12,8 @@ import {
 import type { NodeData } from '../../store/workflow-store';
 import { useWorkflowStore } from '../../store/workflow-store';
 import { useNodeIssues } from '../../lib/schema-store';
+import { effectiveSubflowParameters } from '../../lib/subflow-params';
+import type { NodeDef, NodeSettingDef } from '../../api/client';
 import {
   Tooltip,
   TooltipContent,
@@ -139,6 +141,123 @@ function NodeIssueBadge({ nodeId }: { nodeId: string }) {
   );
 }
 
+// ─── On-node settings summary ───────────────────────────────────────
+// A compact, read-only view of a node's configured values rendered on the
+// card itself, so configuration is visible at a glance without opening the
+// PropertyPanel. Generic nodes list their non-empty settings (joined with the
+// NodeDef's setting definitions for labels/options); subflow proxies list
+// their subflow parameters instead — a required parameter with no value shows
+// a red "Missing" so an unrunnable subflow is obvious from the canvas.
+
+export interface SummaryRow {
+  key: string;
+  label: string;
+  value: string;
+  missing?: boolean;
+}
+
+const MAX_SUMMARY_ROWS = 3;
+
+/** Human-readable rendering of a setting value; null = don't show a row. */
+export function formatSummaryValue(
+  value: unknown,
+  options?: ReadonlyArray<{ label: string; value: string }>,
+): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value === 'boolean') return value ? 'On' : 'Off';
+  if (Array.isArray(value)) return `${value.length} item${value.length === 1 ? '' : 's'}`;
+  if (typeof value === 'object') return null; // structured settings have no one-line form
+  const str = String(value);
+  if (str.trim() === '') return null;
+  // Map select values to their option label (same as the PropertyPanel).
+  const opt = options?.find((o) => o.value === str);
+  return opt ? opt.label : str;
+}
+
+/** Rows for a regular node: its setting definitions joined with current values. */
+export function buildSettingRows(
+  settings: Record<string, unknown>,
+  settingDefs: readonly NodeSettingDef[],
+): SummaryRow[] {
+  const rows: SummaryRow[] = [];
+  const sorted = [...settingDefs].sort((a, b) => (a.order ?? 99) - (b.order ?? 99));
+  for (const def of sorted) {
+    if (def.key === 'subflowId') continue; // internal wiring, not user config
+    if ((def as { hidden?: boolean }).hidden) continue;
+    // Same visibility rule as the PropertyPanel form.
+    if (def.dependsOn && settings[def.dependsOn.key] !== def.dependsOn.value) continue;
+    const value = formatSummaryValue(settings[def.key] ?? def.defaultValue, def.options);
+    if (value === null) continue;
+    rows.push({ key: def.key, label: def.label, value });
+  }
+  return rows;
+}
+
+/** Rows for a subflow proxy: its subflow parameters and their current values. */
+export function buildParamRows(
+  settings: Record<string, unknown>,
+  parameters: ReadonlyArray<{
+    id: string;
+    name: string;
+    required?: boolean;
+    options?: ReadonlyArray<{ label: string; value: string }>;
+    defaultValue?: unknown;
+  }>,
+): SummaryRow[] {
+  const rows: SummaryRow[] = [];
+  for (const p of parameters) {
+    const value = formatSummaryValue(settings[p.id] ?? p.defaultValue, p.options);
+    if (value === null) {
+      // Unset required param: show it, in red — this subflow can't run yet.
+      if (p.required) rows.push({ key: p.id, label: p.name, value: 'Missing', missing: true });
+      continue;
+    }
+    rows.push({ key: p.id, label: p.name, value });
+  }
+  return rows;
+}
+
+export function NodeSettingsSummary({ rows }: { rows: SummaryRow[] }) {
+  if (rows.length === 0) return null; // unconfigured nodes keep their compact look
+
+  const visible = rows.slice(0, MAX_SUMMARY_ROWS);
+  const overflow = rows.slice(MAX_SUMMARY_ROWS);
+
+  return (
+    <div className="mt-2 pt-2 border-t border-white/10 light:border-black/10 flex flex-col gap-1">
+      {visible.map((r) => (
+        <div key={r.key} className="flex items-center gap-1.5 text-[10px] leading-tight min-w-0">
+          <span className="text-gray-500 flex-shrink-0">{r.label}</span>
+          <span className={`truncate ${r.missing ? 'text-red-400' : 'text-gray-300 light:text-gray-700'}`}>
+            {r.value}
+          </span>
+        </div>
+      ))}
+      {overflow.length > 0 && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span
+              className="text-[10px] text-gray-500 cursor-default w-fit"
+              onClick={(e) => e.stopPropagation()}
+            >
+              +{overflow.length} more
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            <div className="flex flex-col gap-1 max-w-xs">
+              {overflow.map((r) => (
+                <span key={r.key}>
+                  {r.label}: {r.missing ? 'Missing' : r.value}
+                </span>
+              ))}
+            </div>
+          </TooltipContent>
+        </Tooltip>
+      )}
+    </div>
+  );
+}
+
 // ─── Base Node Component ────────────────────────────────────────────
 
 function BaseNode({ id, data, selected }: NodeProps) {
@@ -146,7 +265,7 @@ function BaseNode({ id, data, selected }: NodeProps) {
   const colors = getColors(nodeData.category);
   const Icon = getIcon(nodeData.icon);
   const setSelected = useWorkflowStore((s: { setSelectedNode: (id: string | null) => void }) => s.setSelectedNode);
-  const defs = useWorkflowStore((s: { nodeDefinitions: { type: string; ports: Array<{ direction: string }> }[] }) => s.nodeDefinitions);
+  const defs = useWorkflowStore((s: { nodeDefinitions: NodeDef[] }) => s.nodeDefinitions);
   const def = defs.find((d: { type: string }) => d.type === nodeData.nodeType);
 
   const hasInputs = def?.ports.some((p: { direction: string }) => p.direction === 'input') ?? false;
@@ -185,11 +304,26 @@ function BaseNode({ id, data, selected }: NodeProps) {
   // referencing a handle id that didn't exist at last measurement silently
   // fail to draw. `updateNodeInternals` is the explicit signal React Flow
   // needs to re-measure this node's handles.
+  // On-node settings summary rows. Subflow proxies show their parameters
+  // (with red "Missing" for unfilled required ones); every other node shows
+  // its non-empty settings joined with the def's labels/options.
+  const summaryRows =
+    isSubflow && subflowDef
+      ? buildParamRows(
+          nodeData.settings ?? {},
+          effectiveSubflowParameters(subflowDef, (t) => defs.find((d) => d.type === t)?.settings),
+        )
+      : buildSettingRows(nodeData.settings ?? {}, def?.settings ?? []);
+
   const updateNodeInternals = useUpdateNodeInternals();
   const handleKey = inputPortNames.join(',') + '|' + outputPortNames.join(',');
+  // The summary changes the node's height; %-positioned named-port handles
+  // must be re-measured when the number of rendered rows changes.
+  const summaryRowCount =
+    Math.min(summaryRows.length, MAX_SUMMARY_ROWS) + (summaryRows.length > MAX_SUMMARY_ROWS ? 1 : 0);
   useEffect(() => {
     updateNodeInternals(id);
-  }, [id, useNamedPorts, handleKey, updateNodeInternals]);
+  }, [id, useNamedPorts, handleKey, summaryRowCount, updateNodeInternals]);
 
   const handleClass =
     '!w-3.5 !h-3.5 !border-2 !bg-slate-300 !border-slate-500 transition-transform hover:!scale-125';
@@ -237,6 +371,7 @@ function BaseNode({ id, data, selected }: NodeProps) {
               <div className="text-[11px] text-gray-500 capitalize tracking-wide mt-0.5">{nodeData.category}</div>
             </div>
           </div>
+          <NodeSettingsSummary rows={summaryRows} />
         </div>
 
         {/* Named output handles — falls back to a single generic "out" handle
@@ -302,6 +437,7 @@ function BaseNode({ id, data, selected }: NodeProps) {
             </div>
           </div>
         </div>
+        <NodeSettingsSummary rows={summaryRows} />
       </div>
 
       {/* Output handle */}

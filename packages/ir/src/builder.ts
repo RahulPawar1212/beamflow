@@ -10,7 +10,7 @@
  */
 
 import type { INodeInstance, IConnection, InlineIRStep, SerializedWorkflow } from '@beamflow/shared';
-import { resolveSubflowOutputs, IRStepType } from '@beamflow/shared';
+import { resolveSubflowOutputs, IRStepType, deriveAutoParameters, mergeSubflowParameters } from '@beamflow/shared';
 import type { NodeRegistry } from '@beamflow/core';
 import { DAG, deserializeWorkflow } from '@beamflow/graph';
 import type {
@@ -267,7 +267,15 @@ function buildCompositeStepForSubflowNode(
   });
 
   // ── Composite parameters: ISubflowParameter -> IRCompositeParameter ──────
-  const compositeParams: IRCompositeParameter[] = (subMeta.parameters ?? []).map(
+  // Live-merged with a fresh derivation from the subflow's current nodes (see
+  // @beamflow/shared subflow-auto-params + editor's subflow-params.ts), so a
+  // subflow saved before auto-params existed still generates code that honors
+  // a value the user filled in via the live-derived parent-side parameter.
+  const effectiveParams = mergeSubflowParameters(
+    subMeta.parameters ?? [],
+    deriveAutoParameters(resolved.workflow.nodes, (t) => registry.get(t)?.settings),
+  );
+  const compositeParams: IRCompositeParameter[] = effectiveParams.map(
     (p) => {
       const targetStep = subPipeline.steps.find((s) => s.id === p.targetNodeId);
       const currentValue = targetStep?.params[p.targetSettingKey];

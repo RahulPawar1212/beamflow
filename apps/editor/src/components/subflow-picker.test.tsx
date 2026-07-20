@@ -2,9 +2,11 @@
 /**
  * Tests for the shared-subflow-library feature:
  *  (1) the palette hides system:subflow-input / -output but keeps system:subflow
- *  (2) the Subflow node's picker is a searchable list of the user-GLOBAL subflow
- *      library (all projects), showing name + description + "used by N";
- *      choosing one sets subflowId and relabels the node; self is excluded.
+ *  (2) the Subflow node's picker collapses to a compact "Using: X" row + a
+ *      Change/Choose… button; clicking it opens a modal with the searchable
+ *      list of the user-GLOBAL subflow library (all projects), showing name +
+ *      description + "used by N"; choosing one sets subflowId, relabels the
+ *      node, and closes the modal; self is excluded.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, cleanup, waitFor, fireEvent, within } from '@testing-library/react';
@@ -75,10 +77,23 @@ describe('Subflow picker (shared library)', () => {
     useWorkflowStore.getState().setSelectedNode('sf');
   }
 
-  it('lists global subflows with description + used-by, excludes self', async () => {
+  it('collapsed state shows a "Choose…" button and no list until opened', async () => {
     addSubflowNode();
     render(<PropertyPanel />);
 
+    expect(screen.getByText('No subflow selected')).toBeInTheDocument();
+    expect(screen.getByText('Choose…')).toBeInTheDocument();
+    expect(screen.queryByText('Clean CSV')).toBeNull();
+    expect(screen.queryByPlaceholderText('Search subflows…')).toBeNull();
+    // The list is not fetched until the modal opens.
+    expect(api.listSubflows).not.toHaveBeenCalled();
+  });
+
+  it('opening the modal lists global subflows with description + used-by, excludes self', async () => {
+    addSubflowNode();
+    render(<PropertyPanel />);
+
+    fireEvent.click(screen.getByText('Choose…'));
     await waitFor(() => expect(screen.getByText('Clean CSV')).toBeInTheDocument());
     expect(screen.getByText('Enrich')).toBeInTheDocument();
     expect(screen.getByText('trim + dedupe')).toBeInTheDocument(); // description shown
@@ -91,6 +106,7 @@ describe('Subflow picker (shared library)', () => {
   it('search filters the list', async () => {
     addSubflowNode();
     render(<PropertyPanel />);
+    fireEvent.click(screen.getByText('Choose…'));
     await waitFor(() => expect(screen.getByText('Clean CSV')).toBeInTheDocument());
 
     fireEvent.change(screen.getByPlaceholderText('Search subflows…'), { target: { value: 'enrich' } });
@@ -98,9 +114,10 @@ describe('Subflow picker (shared library)', () => {
     expect(screen.getByText('Enrich')).toBeInTheDocument();
   });
 
-  it('picking a subflow sets subflowId and relabels the node', async () => {
+  it('picking a subflow sets subflowId, relabels the node, and closes the modal', async () => {
     addSubflowNode();
     render(<PropertyPanel />);
+    fireEvent.click(screen.getByText('Choose…'));
     await waitFor(() => expect(screen.getByText('Clean CSV')).toBeInTheDocument());
 
     fireEvent.click(screen.getByText('Clean CSV'));
@@ -108,5 +125,10 @@ describe('Subflow picker (shared library)', () => {
     const node = useWorkflowStore.getState().nodes.find((n) => n.id === 'sf')!;
     expect(node.data.settings.subflowId).toBe('sf_a');
     expect(node.data.label).toBe('Clean CSV');
+
+    // Modal closes and the collapsed row now shows the selection.
+    await waitFor(() => expect(screen.queryByPlaceholderText('Search subflows…')).toBeNull());
+    expect(await screen.findByText('Clean CSV')).toBeInTheDocument(); // in the collapsed "Using:" row
+    expect(screen.getByText('Change')).toBeInTheDocument();
   });
 });

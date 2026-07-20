@@ -105,10 +105,13 @@ export function Canvas() {
       {navigationStack.length > 0 && (
         <div className="absolute top-4 left-4 z-10 flex items-center gap-2 px-3 py-2 bg-[var(--color-surface-100)] border border-[var(--color-border)] rounded-lg shadow-sm">
           <button
-            onClick={() => {
-              // Go back to root: loop exitSubflow until stack is empty
-              while(useWorkflowStore.getState().navigationStack.length > 0) {
-                useWorkflowStore.getState().exitSubflow();
+            onClick={async () => {
+              // Go back to root: exitSubflow persists the current level's edits
+              // before popping, so each pop must be AWAITED sequentially — a
+              // fire-and-forget loop would race the saves against each other
+              // and against the stack pops themselves.
+              while (useWorkflowStore.getState().navigationStack.length > 0) {
+                await useWorkflowStore.getState().exitSubflow();
               }
             }}
             className="flex items-center text-sm font-medium text-gray-400 hover:text-white transition-colors"
@@ -116,18 +119,18 @@ export function Canvas() {
             <Home size={16} className="mr-1.5" />
             Root
           </button>
-          
+
           {navigationStack.map((entry, idx) => (
             <React.Fragment key={idx}>
               <ChevronRight size={16} className="text-gray-600" />
               <button
-                onClick={() => {
-                  // Pop until we reach this level
-                  const state = useWorkflowStore.getState();
-                  const popCount = state.navigationStack.length - idx - 1;
-                  for(let i=0; i < popCount; i++) state.exitSubflow();
-                  // For the target level, exitSubflow will pop it into view
-                  if (popCount >= 0) state.exitSubflow();
+                onClick={async () => {
+                  // Pop until we reach this level — sequentially awaited (see Root above).
+                  const popCount = useWorkflowStore.getState().navigationStack.length - idx - 1;
+                  for (let i = 0; i < popCount + 1; i++) {
+                    if (useWorkflowStore.getState().navigationStack.length === 0) break;
+                    await useWorkflowStore.getState().exitSubflow();
+                  }
                 }}
                 className="text-sm font-medium text-gray-400 hover:text-white transition-colors"
               >

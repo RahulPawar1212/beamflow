@@ -309,6 +309,15 @@ export interface NodeSettingDef {
   group?: string;
   order?: number;
   dependsOn?: { key: string; value: unknown };
+  /** Row-field descriptors for `type: 'list'` settings. */
+  itemFields?: ReadonlyArray<{
+    key: string;
+    label: string;
+    type: 'text' | 'number' | 'select' | 'column' | 'boolean';
+    options?: ReadonlyArray<{ label: string; value: string }>;
+    placeholder?: string;
+    defaultValue?: unknown;
+  }>;
 }
 
 /**
@@ -323,6 +332,7 @@ export interface NodeDef {
   name: string;
   description: string;
   category: string;
+  subcategory?: string;
   icon: string;
   version: string;
   tags?: string[];

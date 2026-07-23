@@ -19,6 +19,8 @@ export {
   type IPort,
   type ISettingValidation,
   type ISettingDefinition,
+  type IListItemField,
+  type ListItemFieldType,
   type INodeDefinition,
   type INodeInstance,
   type InlineIRStep,

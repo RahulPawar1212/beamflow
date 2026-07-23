@@ -5,7 +5,7 @@
 
 import React from 'react';
 import { createPortal } from 'react-dom';
-import { X, Settings2, Trash2, Plus, Database, UploadCloud, Loader2, Boxes, Link } from 'lucide-react';
+import { X, Settings2, Trash2, Plus, Database, UploadCloud, Loader2, Boxes, Link, ChevronUp, ChevronDown } from 'lucide-react';
 import { useWorkflowStore } from '../store/workflow-store';
 import { useSchemaStore } from '../lib/schema-store';
 import { effectiveSubflowParameters } from '../lib/subflow-params';
@@ -739,8 +739,190 @@ function SettingControl({ nodeId, setting, value, onChange, inputColumns }: Sett
           ))}
         </select>
       )}
+
+      {/* List (repeatable rows of structured fields) */}
+      {setting.type === 'list' && (
+        <ListEditor
+          setting={setting}
+          value={(value as Array<Record<string, unknown>>) || []}
+          onChange={onChange}
+          inputColumns={inputColumns}
+          disabled={isFixed}
+          baseInputClass={baseInputClass}
+        />
+      )}
       </>
       )}
+    </div>
+  );
+}
+
+// ─── List editor (repeatable rows for SettingType.List) ─────────────────────
+// Renders `setting.itemFields` as a stack of rows; each row is a grid of the
+// declared fields. `type: 'column'` fields render a dropdown of upstream
+// columns (falling back to a free-text input when no schema is available yet).
+
+interface ListEditorProps {
+  setting: NodeDef['settings'][0];
+  value: Array<Record<string, unknown>>;
+  onChange: (value: Array<Record<string, unknown>>) => void;
+  inputColumns: any[];
+  disabled?: boolean;
+  baseInputClass: string;
+}
+
+function ListEditor({ setting, value, onChange, inputColumns, disabled, baseInputClass }: ListEditorProps) {
+  const fields = ((setting as any).itemFields ?? []) as Array<{
+    key: string;
+    label: string;
+    type: 'text' | 'number' | 'select' | 'column' | 'boolean';
+    options?: Array<{ label: string; value: string }>;
+    placeholder?: string;
+    defaultValue?: unknown;
+  }>;
+
+  const rows = Array.isArray(value) ? value : [];
+
+  const newRow = (): Record<string, unknown> => {
+    const r: Record<string, unknown> = {};
+    for (const f of fields) if (f.defaultValue !== undefined) r[f.key] = f.defaultValue;
+    return r;
+  };
+
+  const updateRow = (idx: number, key: string, v: unknown) => {
+    const next = rows.map((row, i) => (i === idx ? { ...row, [key]: v } : row));
+    onChange(next);
+  };
+  const addRow = () => onChange([...rows, newRow()]);
+  const removeRow = (idx: number) => onChange(rows.filter((_, i) => i !== idx));
+  const moveRow = (idx: number, dir: -1 | 1) => {
+    const j = idx + dir;
+    if (j < 0 || j >= rows.length) return;
+    const next = [...rows];
+    [next[idx], next[j]] = [next[j], next[idx]];
+    onChange(next);
+  };
+
+  return (
+    <div className="flex flex-col gap-2">
+      {rows.length === 0 && (
+        <div className="text-[10px] text-gray-600 italic py-1">No rows yet.</div>
+      )}
+      {rows.map((row, idx) => (
+        <div
+          key={idx}
+          className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-200)] p-2 flex flex-col gap-1.5"
+        >
+          <div className="flex items-center justify-between">
+            <span className="text-[9px] font-semibold text-gray-500 uppercase tracking-wider">
+              #{idx + 1}
+            </span>
+            <div className="flex items-center gap-0.5">
+              <button
+                type="button"
+                onClick={() => moveRow(idx, -1)}
+                disabled={disabled || idx === 0}
+                title="Move up"
+                className="p-0.5 text-gray-500 hover:text-gray-300 disabled:opacity-30"
+              >
+                <ChevronUp size={12} />
+              </button>
+              <button
+                type="button"
+                onClick={() => moveRow(idx, 1)}
+                disabled={disabled || idx === rows.length - 1}
+                title="Move down"
+                className="p-0.5 text-gray-500 hover:text-gray-300 disabled:opacity-30"
+              >
+                <ChevronDown size={12} />
+              </button>
+              <button
+                type="button"
+                onClick={() => removeRow(idx)}
+                disabled={disabled}
+                title="Remove row"
+                className="p-0.5 text-red-400/70 hover:text-red-400 disabled:opacity-30"
+              >
+                <Trash2 size={12} />
+              </button>
+            </div>
+          </div>
+          {fields.map((f) => {
+            const fv = row[f.key];
+            const label = (
+              <span className="text-[10px] text-gray-500 w-20 shrink-0">{f.label}</span>
+            );
+            const useColumnDropdown = f.type === 'column' && inputColumns.length > 0;
+            return (
+              <div key={f.key} className="flex items-center gap-2">
+                {label}
+                {f.type === 'boolean' ? (
+                  <input
+                    type="checkbox"
+                    checked={(fv as boolean) ?? false}
+                    onChange={(e) => updateRow(idx, f.key, e.target.checked)}
+                    disabled={disabled}
+                    className="rounded border-gray-600 bg-[var(--color-surface-300)] text-indigo-500 focus:ring-indigo-500/30 focus:ring-offset-0"
+                  />
+                ) : f.type === 'select' ? (
+                  <select
+                    value={(fv as string) ?? ''}
+                    onChange={(e) => updateRow(idx, f.key, e.target.value)}
+                    disabled={disabled}
+                    className={`${baseInputClass} flex-1`}
+                  >
+                    <option value="">--</option>
+                    {f.options?.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                ) : useColumnDropdown ? (
+                  <select
+                    value={(fv as string) ?? ''}
+                    onChange={(e) => updateRow(idx, f.key, e.target.value)}
+                    disabled={disabled}
+                    className={`${baseInputClass} flex-1`}
+                  >
+                    <option value="">-- Column --</option>
+                    {inputColumns.map((col) => (
+                      <option key={col.id || col.name} value={col.name}>
+                        {col.name} ({col.type})
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type={f.type === 'number' ? 'number' : 'text'}
+                    value={(fv as string | number) ?? ''}
+                    onChange={(e) =>
+                      updateRow(
+                        idx,
+                        f.key,
+                        f.type === 'number'
+                          ? e.target.value === '' ? undefined : Number(e.target.value)
+                          : e.target.value,
+                      )
+                    }
+                    placeholder={f.placeholder}
+                    disabled={disabled}
+                    className={`${baseInputClass} flex-1`}
+                  />
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ))}
+      <button
+        type="button"
+        onClick={addRow}
+        disabled={disabled}
+        className="w-full flex items-center justify-center gap-1 text-[11px] text-indigo-400 hover:text-indigo-300 font-medium px-2 py-1.5 border border-dashed border-indigo-500/30 rounded-lg hover:bg-indigo-500/10 transition-colors disabled:opacity-40"
+      >
+        <Plus size={12} /> Add Row
+      </button>
     </div>
   );
 }

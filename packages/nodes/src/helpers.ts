@@ -10,6 +10,7 @@ import type {
   IPort,
   ISettingDefinition,
   ISettingValidation,
+  IListItemField,
   IRStepDefinition,
   ValidationIssue,
   NodeCategory,
@@ -27,6 +28,7 @@ export interface DefineNodeOptions {
   name: string;
   description: string;
   category: NodeCategory;
+  subcategory?: string;
   icon: string;
   version?: string;
   ports: IPort[];
@@ -47,6 +49,7 @@ export function defineNode(options: DefineNodeOptions): INodeDefinition {
     name: options.name,
     description: options.description,
     category: options.category,
+    subcategory: options.subcategory,
     icon: options.icon,
     version: options.version || '1.0.0',
     ports: options.ports,
@@ -267,6 +270,40 @@ export function expressionSetting(
     type: SettingType.Expression,
     defaultValue: opts?.defaultValue ?? '',
     placeholder: opts?.placeholder,
+    validation,
+    group: opts?.group,
+    order: opts?.order,
+  };
+}
+
+/**
+ * A repeatable list of structured rows (array of objects). `itemFields`
+ * declares the shape of one row; the stored value is `Array<Record<string, unknown>>`.
+ * Used for Aggregate `aggregations`, Derived Column `formulas`, Projection `selections`, etc.
+ */
+export function listSetting(
+  key: string,
+  label: string,
+  itemFields: IListItemField[],
+  opts?: {
+    description?: string;
+    defaultValue?: Array<Record<string, unknown>>;
+    required?: boolean;
+    group?: string;
+    order?: number;
+  },
+): ISettingDefinition {
+  const validation: ISettingValidation[] = [];
+  if (opts?.required) {
+    validation.push({ type: 'required', message: `${label} is required.` });
+  }
+  return {
+    key,
+    label,
+    description: opts?.description,
+    type: SettingType.List,
+    defaultValue: opts?.defaultValue ?? [],
+    itemFields,
     validation,
     group: opts?.group,
     order: opts?.order,

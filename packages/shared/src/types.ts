@@ -58,6 +58,32 @@ export enum SettingType {
   Date = 'date',
   TextArea = 'textarea',
   KeyValue = 'key-value',
+  /**
+   * A repeatable list of structured rows (array of objects). The row shape is
+   * declared via `ISettingDefinition.itemFields`. Used for settings like
+   * Aggregate `aggregations`, Derived Column `formulas`, and Projection
+   * `selections`. The stored value is `Array<Record<string, unknown>>`.
+   */
+  List = 'list',
+}
+
+/** UI control for one field within a `SettingType.List` row. */
+export type ListItemFieldType = 'text' | 'number' | 'select' | 'column' | 'boolean';
+
+/** Describes one field of a repeatable list row (see `SettingType.List`). */
+export interface IListItemField {
+  /** Key within the row object. */
+  readonly key: string;
+  /** Human-readable label (shown as a column header / placeholder). */
+  readonly label: string;
+  /** Which control to render for this field. `column` renders a dropdown of upstream columns. */
+  readonly type: ListItemFieldType;
+  /** Options for `select` fields. */
+  readonly options?: ReadonlyArray<{ label: string; value: string }>;
+  /** Placeholder text. */
+  readonly placeholder?: string;
+  /** Default value for a newly added row. */
+  readonly defaultValue?: unknown;
 }
 
 /** Execution state of a pipeline run. */
@@ -138,6 +164,11 @@ export interface ISettingDefinition {
     readonly key: string;
     readonly value: unknown;
   };
+  /**
+   * Row-field descriptors for a `SettingType.List` setting. Ignored for other
+   * setting types. Each entry declares one column of the repeatable list.
+   */
+  readonly itemFields?: ReadonlyArray<IListItemField>;
 }
 
 // ─── Node Definition Interface ──────────────────────────────────────────────────
@@ -159,6 +190,12 @@ export interface INodeDefinition {
   readonly description: string;
   /** Category for palette organization. */
   readonly category: NodeCategory;
+  /**
+   * Optional finer-grained grouping within a category, used by the palette to
+   * render sub-headers (e.g. Transform → "Filtering" / "Shaping" /
+   * "Aggregation"). Nodes without a subcategory group under the category directly.
+   */
+  readonly subcategory?: string;
   /** Icon identifier (icon library name or SVG path). */
   readonly icon: string;
   /** Semantic version of this node definition. */

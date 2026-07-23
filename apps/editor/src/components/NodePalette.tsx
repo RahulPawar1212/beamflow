@@ -8,7 +8,7 @@ import {
   Search, FileText, ArrowRightLeft, Calculator, GitBranch,
   FileOutput, Brain, ChevronDown, ChevronRight, Plus, X,
   Sparkles, Pencil, Trash2,
-  FileJson, Filter, Group, Database, Box,
+  FileJson, Filter, Group, Database, Box, Sigma, Columns3,
 } from 'lucide-react';
 import { useWorkflowStore } from '../store/workflow-store';
 import { isCustomType, type CustomNodeDef } from '../customNodes';
@@ -53,6 +53,8 @@ const nodeIconMap: Record<string, React.ElementType> = {
   'sparkles': Sparkles,
   'brain': Brain,
   'calculator': Calculator,
+  'sigma': Sigma,
+  'columns': Columns3,
 };
 
 const categoryIcons: Record<string, React.ElementType> = {
@@ -118,8 +120,98 @@ export function NodePalette() {
     return groups;
   }, [nodeDefinitions, searchQuery]);
 
+  // Within a category, split nodes into subcategory buckets in first-seen order.
+  // Nodes without a subcategory collect under a single unnamed bucket ('') that
+  // renders with no sub-header, so categories that don't use subcategories look
+  // exactly as before.
+  const subgroupsFor = (nodes: NodeDef[]): Array<{ name: string; nodes: NodeDef[] }> => {
+    const order: string[] = [];
+    const buckets: Record<string, NodeDef[]> = {};
+    for (const node of nodes) {
+      const sub = node.subcategory || '';
+      if (!buckets[sub]) {
+        buckets[sub] = [];
+        order.push(sub);
+      }
+      buckets[sub].push(node);
+    }
+    // Unnamed bucket first, then named subcategories in first-seen order.
+    order.sort((a, b) => (a === '' ? -1 : b === '' ? 1 : 0));
+    return order.map((name) => ({ name, nodes: buckets[name] }));
+  };
+
   const toggleCategory = (cat: string) => {
     setCollapsed((prev) => ({ ...prev, [cat]: !prev[cat] }));
+  };
+
+  // One draggable node row. Extracted so it can be reused across subcategory
+  // buckets within a category.
+  const renderNodeRow = (node: NodeDef) => {
+    const custom = isCustomType(node.type);
+    const def = custom ? customNodeDefs.find((d) => d.id === node.type) : undefined;
+    const NodeIcon = nodeIconMap[node.icon] || categoryIcons[node.category] || Box;
+    return (
+      <div
+        key={node.type}
+        draggable
+        onDragStart={(e) => onDragStart(e, node.type)}
+        onDoubleClick={() => onAddNode(node.type)}
+        title={`${node.name} — ${node.description}`}
+        className="flex items-center gap-2.5 px-2.5 py-2 rounded-lg
+          border border-transparent bg-[var(--color-surface-200)]/40
+          cursor-grab active:cursor-grabbing active:scale-[0.98]
+          hover:bg-[var(--color-surface-200)] hover:border-[var(--color-border-hover)] transition-all group"
+      >
+        <span
+          className={`flex-shrink-0 p-1.5 rounded-lg ring-1 ${categoryChip[node.category] || categoryChip.transform}`}
+        >
+          <NodeIcon size={15} />
+        </span>
+        <div className="flex-1 min-w-0">
+          <div className="text-[13px] font-medium text-gray-200 truncate leading-tight">
+            {node.name}
+          </div>
+          {node.description && (
+            <div className="text-[10.5px] text-gray-500 leading-snug mt-0.5 truncate">
+              {node.description}
+            </div>
+          )}
+        </div>
+        <div className="flex items-center gap-0.5 flex-shrink-0">
+          {custom && def && (
+            <>
+              <button
+                onClick={() => setModal(def)}
+                title="Edit custom node"
+                className="p-1 rounded-md text-gray-600 opacity-0
+                  group-hover:opacity-100 hover:text-cyan-400 hover:bg-white/10 transition-all"
+              >
+                <Pencil size={12} />
+              </button>
+              <button
+                onClick={() => {
+                  deleteCustomNode(def.id);
+                  addToast('info', `Deleted "${def.name}"`);
+                }}
+                title="Delete custom node"
+                className="p-1 rounded-md text-gray-600 opacity-0
+                  group-hover:opacity-100 hover:text-red-400 hover:bg-white/10 transition-all"
+              >
+                <Trash2 size={12} />
+              </button>
+            </>
+          )}
+          <button
+            onClick={() => onAddNode(node.type)}
+            title="Add to canvas"
+            className="p-1 rounded-md text-gray-500 opacity-0
+              group-hover:opacity-100 hover:text-indigo-400 hover:bg-indigo-500/15 transition-all"
+          >
+            <Plus size={14} />
+          </button>
+        </div>
+      </div>
+    );
   };
 
   const onDragStart = (event: React.DragEvent, nodeType: string) => {
@@ -275,79 +367,19 @@ export function NodePalette() {
                 </span>
               </button>
 
-              {/* Nodes in category */}
+              {/* Nodes in category, split into subcategory buckets */}
               {!isCollapsed && (
-                <div className="mt-1 flex flex-col gap-1">
-                  {nodes.map((node) => {
-                    const custom = isCustomType(node.type);
-                    const def = custom
-                      ? customNodeDefs.find((d) => d.id === node.type)
-                      : undefined;
-                    const NodeIcon =
-                      nodeIconMap[node.icon] || categoryIcons[node.category] || Box;
-                    return (
-                      <div
-                        key={node.type}
-                        draggable
-                        onDragStart={(e) => onDragStart(e, node.type)}
-                        onDoubleClick={() => onAddNode(node.type)}
-                        title={`${node.name} — ${node.description}`}
-                        className="flex items-center gap-2.5 px-2.5 py-2 rounded-lg
-                          border border-transparent bg-[var(--color-surface-200)]/40
-                          cursor-grab active:cursor-grabbing active:scale-[0.98]
-                          hover:bg-[var(--color-surface-200)] hover:border-[var(--color-border-hover)] transition-all group"
-                      >
-                        <span
-                          className={`flex-shrink-0 p-1.5 rounded-lg ring-1 ${categoryChip[node.category] || categoryChip.transform}`}
-                        >
-                          <NodeIcon size={15} />
-                        </span>
-                        <div className="flex-1 min-w-0">
-                          <div className="text-[13px] font-medium text-gray-200 truncate leading-tight">
-                            {node.name}
-                          </div>
-                          {node.description && (
-                            <div className="text-[10.5px] text-gray-500 leading-snug mt-0.5 truncate">
-                              {node.description}
-                            </div>
-                          )}
+                <div className="mt-1 flex flex-col gap-1.5">
+                  {subgroupsFor(nodes).map((sub) => (
+                    <div key={sub.name || '__none__'} className="flex flex-col gap-1">
+                      {sub.name && (
+                        <div className="px-1 pt-1 text-[9px] font-semibold uppercase tracking-[0.1em] text-gray-600">
+                          {sub.name}
                         </div>
-                        <div className="flex items-center gap-0.5 flex-shrink-0">
-                          {custom && def && (
-                            <>
-                              <button
-                                onClick={() => setModal(def)}
-                                title="Edit custom node"
-                                className="p-1 rounded-md text-gray-600 opacity-0
-                                  group-hover:opacity-100 hover:text-cyan-400 hover:bg-white/10 transition-all"
-                              >
-                                <Pencil size={12} />
-                              </button>
-                              <button
-                                onClick={() => {
-                                  deleteCustomNode(def.id);
-                                  addToast('info', `Deleted "${def.name}"`);
-                                }}
-                                title="Delete custom node"
-                                className="p-1 rounded-md text-gray-600 opacity-0
-                                  group-hover:opacity-100 hover:text-red-400 hover:bg-white/10 transition-all"
-                              >
-                                <Trash2 size={12} />
-                              </button>
-                            </>
-                          )}
-                          <button
-                            onClick={() => onAddNode(node.type)}
-                            title="Add to canvas"
-                            className="p-1 rounded-md text-gray-500 opacity-0
-                              group-hover:opacity-100 hover:text-indigo-400 hover:bg-indigo-500/15 transition-all"
-                          >
-                            <Plus size={14} />
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
+                      )}
+                      {sub.nodes.map((node) => renderNodeRow(node))}
+                    </div>
+                  ))}
                 </div>
               )}
             </div>

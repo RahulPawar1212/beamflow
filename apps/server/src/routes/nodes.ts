@@ -26,6 +26,7 @@ export async function nodeRoutes(
       name: def.name,
       description: def.description,
       category: def.category,
+      subcategory: def.subcategory,
       icon: def.icon,
       version: def.version,
       tags: def.tags || [],

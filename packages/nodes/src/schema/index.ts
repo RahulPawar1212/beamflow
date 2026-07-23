@@ -49,12 +49,27 @@ export function registerBuiltinSchemaNodes(registry: SchemaNodeRegistry): void {
     'beamflow:filter',
     (nodeId, settings) => new FilterSchemaNode(nodeId, settings),
   );
+  // Filter Rows is schema-preserving (only row count changes), like Filter.
+  registry.register(
+    'beamflow:filter-rows',
+    (nodeId, settings) => new FilterSchemaNode(nodeId, settings),
+  );
   registry.register(
     'beamflow:formula',
     (nodeId, settings) => new FormulaSchemaNode(nodeId, settings),
   );
+  // Derived Column adds computed columns — same shape/settings as Formula.
+  registry.register(
+    'beamflow:derived-column',
+    (nodeId, settings) => new FormulaSchemaNode(nodeId, settings),
+  );
   registry.register(
     'beamflow:select',
+    (nodeId, settings) => new SelectSchemaNode(nodeId, settings),
+  );
+  // Projection = Select with rename/constant support (SelectSchemaNode reads `selections`).
+  registry.register(
+    'beamflow:projection',
     (nodeId, settings) => new SelectSchemaNode(nodeId, settings),
   );
   registry.register(

@@ -10,6 +10,8 @@
  */
 
 import type { NodeDef } from './api/client';
+import type { ISettingDefinition } from '@beamflow/shared';
+import type { ColumnDataType } from '@beamflow/schema';
 
 const STORAGE_KEY = 'beamflow.customNodes';
 export const CUSTOM_NODE_PREFIX = 'custom:';

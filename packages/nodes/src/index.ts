@@ -23,6 +23,10 @@ import { sqlSource } from './sources/sql-source.js';
 import { filter } from './transforms/filter.js';
 import { map } from './transforms/map.js';
 import { groupBy } from './transforms/group-by.js';
+import { filterRows } from './transforms/filter-rows.js';
+import { derivedColumn } from './transforms/derived-column.js';
+import { aggregate } from './transforms/aggregate.js';
+import { projection } from './transforms/projection.js';
 
 // Outputs
 import { csvOutput } from './outputs/csv-output.js';
@@ -51,8 +55,12 @@ export const builtinNodes: INodeDefinition[] = [
   sqlSource,
   // Transforms
   filter,
+  filterRows,
   map,
+  derivedColumn,
   groupBy,
+  aggregate,
+  projection,
   // Outputs
   csvOutput,
 ];
@@ -75,7 +83,18 @@ export const builtinNodesPlugin: IPlugin = {
 };
 
 // Re-export individual nodes for direct access
-export { csvSource, jsonSource, filter, map, groupBy, csvOutput };
+export {
+  csvSource,
+  jsonSource,
+  filter,
+  filterRows,
+  map,
+  derivedColumn,
+  groupBy,
+  aggregate,
+  projection,
+  csvOutput,
+};
 
 // Re-export helpers for plugin authors
 export {
@@ -87,6 +106,7 @@ export {
   booleanSetting,
   numberSetting,
   expressionSetting,
+  listSetting,
   requiredError,
 } from './helpers.js';
 export type { DefineNodeOptions } from './helpers.js';

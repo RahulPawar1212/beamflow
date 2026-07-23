@@ -8,6 +8,7 @@ import { Handle, Position, useUpdateNodeInternals, type NodeProps } from '@xyflo
 import {
   FileText, FileJson, Filter, ArrowRightLeft, Group, FileOutput,
   Database, Box, Sparkles, AlertTriangle, AlertCircle,
+  Calculator, Sigma, Columns3,
 } from 'lucide-react';
 import type { NodeData } from '../../store/workflow-store';
 import { useWorkflowStore } from '../../store/workflow-store';
@@ -32,6 +33,9 @@ const iconMap: Record<string, React.ElementType> = {
   'database': Database,
   'box': Box,
   'sparkles': Sparkles,
+  'calculator': Calculator,
+  'sigma': Sigma,
+  'columns': Columns3,
 };
 
 function getIcon(iconName: string) {

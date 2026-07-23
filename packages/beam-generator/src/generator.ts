@@ -516,6 +516,310 @@ const flatMapExprHandler: OperationClassHandler = {
   },
 };
 
+// ─── Generic dataframe-shaping transforms ────────────────────────────────────
+// Filter Rows / Derived Column / Aggregate / Projection. Each operates on
+// records that are plain Python dicts (one per row) and passes its config in as
+// constructor kwargs. Array-of-object params (formulas / aggregations /
+// selections) are serialized to Python list-of-dict literals for free by
+// `formatPyLiteral` via `paramExpr`.
+
+/**
+ * Filter Rows — keeps records matching a compiled boolean expression over
+ * `element`. The node's `toIR` compiles its structured conditions (between /
+ * in-list / comparisons) into `self.expression`. `_num` (a lenient float
+ * coercion) is exposed in the eval scope so range/numeric comparisons work on
+ * string-valued CSV cells.
+ */
+const filterRowsHandler: OperationClassHandler = {
+  classNameHint: 'FilterRowsTransform',
+  emitClass: (className, emitter) => {
+    emitter.addImport('apache_beam as beam');
+    emitter.blank();
+    emitter.line(`class ${className}(beam.PTransform):`);
+    emitter.indent();
+    emitter.line(`def __init__(self, expression='True'):`);
+    emitter.indent();
+    emitter.line(`super().__init__()`);
+    emitter.line(`self.expression = expression`);
+    emitter.dedent();
+    emitter.blank();
+    emitter.line(`@staticmethod`);
+    emitter.line(`def _num(v):`);
+    emitter.indent();
+    emitter.line(`try:`);
+    emitter.indent();
+    emitter.line(`return float(v)`);
+    emitter.dedent();
+    emitter.line(`except (TypeError, ValueError):`);
+    emitter.indent();
+    emitter.line(`return v`);
+    emitter.dedent();
+    emitter.dedent();
+    emitter.blank();
+    emitter.line(`def expand(self, pcoll):`);
+    emitter.indent();
+    emitter.line(`expression = self.expression`);
+    emitter.line(`num = self._num`);
+    emitter.line(`def keep(element):`);
+    emitter.indent();
+    emitter.line(`return eval(expression, {}, {'element': element, '_num': num})`);
+    emitter.dedent();
+    emitter.line(`return pcoll | 'FilterRows' >> beam.Filter(keep)`);
+    emitter.dedent();
+    emitter.dedent();
+  },
+  instantiationKwargs: (step, ctx) => {
+    return `expression=${paramExpr(step, 'expression', ctx, 'True')}`;
+  },
+};
+
+/**
+ * Derived Column — adds computed columns while keeping all input columns.
+ * Formulas use bare column names and are applied in order, so a later formula
+ * can reference a column produced by an earlier one. Values are numeric-coerced
+ * into the eval scope so arithmetic works on string-valued CSV cells.
+ */
+const derivedColumnHandler: OperationClassHandler = {
+  classNameHint: 'DerivedColumnTransform',
+  emitClass: (className, emitter) => {
+    emitter.addImport('apache_beam as beam');
+    emitter.blank();
+    emitter.line(`class ${className}(beam.PTransform):`);
+    emitter.indent();
+    emitter.line(`def __init__(self, formulas=None):`);
+    emitter.indent();
+    emitter.line(`super().__init__()`);
+    emitter.line(`self.formulas = formulas or []`);
+    emitter.dedent();
+    emitter.blank();
+    emitter.line(`def expand(self, pcoll):`);
+    emitter.indent();
+    emitter.line(`formulas = self.formulas`);
+    emitter.line(`def derive(element):`);
+    emitter.indent();
+    emitter.line(`result = dict(element)`);
+    emitter.line(`for f in formulas:`);
+    emitter.indent();
+    emitter.line(`scope = {}`);
+    emitter.line(`for k, v in result.items():`);
+    emitter.indent();
+    emitter.line(`try:`);
+    emitter.indent();
+    emitter.line(`scope[k] = float(v) if isinstance(v, str) and v.strip() != '' else v`);
+    emitter.dedent();
+    emitter.line(`except (TypeError, ValueError):`);
+    emitter.indent();
+    emitter.line(`scope[k] = v`);
+    emitter.dedent();
+    emitter.dedent();
+    emitter.line(`try:`);
+    emitter.indent();
+    emitter.line(`result[f['outputColumn']] = eval(f['expression'], {}, scope)`);
+    emitter.dedent();
+    emitter.line(`except Exception:`);
+    emitter.indent();
+    emitter.line(`if f.get('nullable'):`);
+    emitter.indent();
+    emitter.line(`result[f['outputColumn']] = None`);
+    emitter.dedent();
+    emitter.line(`else:`);
+    emitter.indent();
+    emitter.line(`raise`);
+    emitter.dedent();
+    emitter.dedent();
+    emitter.dedent();
+    emitter.line(`return result`);
+    emitter.dedent();
+    emitter.line(`return pcoll | 'DerivedColumn' >> beam.Map(derive)`);
+    emitter.dedent();
+    emitter.dedent();
+  },
+  instantiationKwargs: (step, ctx) => {
+    return `formulas=${paramExpr(step, 'formulas', ctx, [])}`;
+  },
+};
+
+/**
+ * Aggregate — groups by key column(s) and computes several aggregations at
+ * once into ONE output dict per group. Uses GroupByKey + a folding Map (rather
+ * than CombinePerKey) because the group is materialized once and folded across
+ * heterogeneous functions (incl. FIRST/LAST and COUNT_DISTINCT) into a single
+ * row — the shape GroupByKey is built for, and correct/simple on DirectRunner.
+ */
+const aggregateHandler: OperationClassHandler = {
+  classNameHint: 'AggregateTransform',
+  emitClass: (className, emitter) => {
+    emitter.addImport('apache_beam as beam');
+    emitter.blank();
+    emitter.line(`class ${className}(beam.PTransform):`);
+    emitter.indent();
+    emitter.line(`def __init__(self, group_by_columns=None, aggregations=None):`);
+    emitter.indent();
+    emitter.line(`super().__init__()`);
+    emitter.line(`self.group_by_columns = group_by_columns or []`);
+    emitter.line(`self.aggregations = aggregations or []`);
+    emitter.dedent();
+    emitter.blank();
+    emitter.line(`def _key(self, el):`);
+    emitter.indent();
+    emitter.line(`if len(self.group_by_columns) == 1:`);
+    emitter.indent();
+    emitter.line(`return el.get(self.group_by_columns[0], '')`);
+    emitter.dedent();
+    emitter.line(`return tuple(el.get(c, '') for c in self.group_by_columns)`);
+    emitter.dedent();
+    emitter.blank();
+    emitter.line(`@staticmethod`);
+    emitter.line(`def _num(v):`);
+    emitter.indent();
+    emitter.line(`try:`);
+    emitter.indent();
+    emitter.line(`return float(v)`);
+    emitter.dedent();
+    emitter.line(`except (TypeError, ValueError):`);
+    emitter.indent();
+    emitter.line(`return None`);
+    emitter.dedent();
+    emitter.dedent();
+    emitter.blank();
+    emitter.line(`def _fold(self, kv):`);
+    emitter.indent();
+    emitter.line(`key, rows = kv`);
+    emitter.line(`rows = list(rows)`);
+    emitter.line(`out = {}`);
+    emitter.line(`if len(self.group_by_columns) == 1:`);
+    emitter.indent();
+    emitter.line(`out[self.group_by_columns[0]] = key`);
+    emitter.dedent();
+    emitter.line(`else:`);
+    emitter.indent();
+    emitter.line(`for i, c in enumerate(self.group_by_columns):`);
+    emitter.indent();
+    emitter.line(`out[c] = key[i]`);
+    emitter.dedent();
+    emitter.dedent();
+    emitter.line(`for agg in self.aggregations:`);
+    emitter.indent();
+    emitter.line(`col = agg.get('column')`);
+    emitter.line(`func = str(agg.get('func', '')).upper()`);
+    emitter.line(`name = agg['outputName']`);
+    emitter.line(`if func == 'COUNT':`);
+    emitter.indent();
+    emitter.line(`if not col or col == '*':`);
+    emitter.indent();
+    emitter.line(`out[name] = len(rows)`);
+    emitter.dedent();
+    emitter.line(`else:`);
+    emitter.indent();
+    emitter.line(`out[name] = sum(1 for r in rows if r.get(col) not in (None, ''))`);
+    emitter.dedent();
+    emitter.dedent();
+    emitter.line(`elif func == 'COUNT_DISTINCT':`);
+    emitter.indent();
+    emitter.line(`out[name] = len({r.get(col) for r in rows if r.get(col) not in (None, '')})`);
+    emitter.dedent();
+    emitter.line(`elif func == 'SUM':`);
+    emitter.indent();
+    emitter.line(`out[name] = sum(n for n in (self._num(r.get(col)) for r in rows) if n is not None)`);
+    emitter.dedent();
+    emitter.line(`elif func == 'AVG':`);
+    emitter.indent();
+    emitter.line(`nums = [n for n in (self._num(r.get(col)) for r in rows) if n is not None]`);
+    emitter.line(`out[name] = (sum(nums) / len(nums)) if nums else None`);
+    emitter.dedent();
+    emitter.line(`elif func == 'MIN':`);
+    emitter.indent();
+    emitter.line(`nums = [n for n in (self._num(r.get(col)) for r in rows) if n is not None]`);
+    emitter.line(`out[name] = min(nums) if nums else None`);
+    emitter.dedent();
+    emitter.line(`elif func == 'MAX':`);
+    emitter.indent();
+    emitter.line(`nums = [n for n in (self._num(r.get(col)) for r in rows) if n is not None]`);
+    emitter.line(`out[name] = max(nums) if nums else None`);
+    emitter.dedent();
+    emitter.line(`elif func == 'FIRST':`);
+    emitter.indent();
+    emitter.line(`out[name] = rows[0].get(col) if rows else None`);
+    emitter.dedent();
+    emitter.line(`elif func == 'LAST':`);
+    emitter.indent();
+    emitter.line(`out[name] = rows[-1].get(col) if rows else None`);
+    emitter.dedent();
+    emitter.line(`else:`);
+    emitter.indent();
+    emitter.line(`out[name] = None`);
+    emitter.dedent();
+    emitter.dedent();
+    emitter.line(`return out`);
+    emitter.dedent();
+    emitter.blank();
+    emitter.line(`def expand(self, pcoll):`);
+    emitter.indent();
+    emitter.line(`return (`);
+    emitter.indent();
+    emitter.line(`pcoll`);
+    emitter.line(`| 'Aggregate_ToKV' >> beam.Map(lambda el: (self._key(el), el))`);
+    emitter.line(`| 'Aggregate_Group' >> beam.GroupByKey()`);
+    emitter.line(`| 'Aggregate_Fold' >> beam.Map(self._fold)`);
+    emitter.dedent();
+    emitter.line(`)`);
+    emitter.dedent();
+    emitter.dedent();
+  },
+  instantiationKwargs: (step, ctx) => {
+    return [
+      `group_by_columns=${paramExpr(step, 'groupByColumns', ctx, [])}`,
+      `aggregations=${paramExpr(step, 'aggregations', ctx, [])}`,
+    ].join(', ');
+  },
+};
+
+/**
+ * Projection — builds a new record from a list of selections. Each selection
+ * either forwards/renames a source column or assigns a literal constant.
+ */
+const projectionHandler: OperationClassHandler = {
+  classNameHint: 'ProjectionTransform',
+  emitClass: (className, emitter) => {
+    emitter.addImport('apache_beam as beam');
+    emitter.blank();
+    emitter.line(`class ${className}(beam.PTransform):`);
+    emitter.indent();
+    emitter.line(`def __init__(self, selections=None):`);
+    emitter.indent();
+    emitter.line(`super().__init__()`);
+    emitter.line(`self.selections = selections or []`);
+    emitter.dedent();
+    emitter.blank();
+    emitter.line(`def expand(self, pcoll):`);
+    emitter.indent();
+    emitter.line(`selections = self.selections`);
+    emitter.line(`def project(element):`);
+    emitter.indent();
+    emitter.line(`result = {}`);
+    emitter.line(`for s in selections:`);
+    emitter.indent();
+    emitter.line(`name = s['outputName']`);
+    emitter.line(`if 'constant' in s and not s.get('sourceColumn'):`);
+    emitter.indent();
+    emitter.line(`result[name] = s['constant']`);
+    emitter.dedent();
+    emitter.line(`else:`);
+    emitter.indent();
+    emitter.line(`result[name] = element.get(s.get('sourceColumn'))`);
+    emitter.dedent();
+    emitter.dedent();
+    emitter.line(`return result`);
+    emitter.dedent();
+    emitter.line(`return pcoll | 'Projection' >> beam.Map(project)`);
+    emitter.dedent();
+    emitter.dedent();
+  },
+  instantiationKwargs: (step, ctx) => {
+    return `selections=${paramExpr(step, 'selections', ctx, [])}`;
+  },
+};
+
 // ─── Handler Registry ───────────────────────────────────────────────────────
 
 const operationHandlers = new Map<string, OperationClassHandler>([
@@ -530,6 +834,11 @@ const operationHandlers = new Map<string, OperationClassHandler>([
   ['MapExpr', mapExprHandler],
   ['FilterExpr', filterExprHandler],
   ['FlatMapExpr', flatMapExprHandler],
+  // Generic dataframe-shaping transforms
+  ['FilterRows', filterRowsHandler],
+  ['DerivedColumn', derivedColumnHandler],
+  ['Aggregate', aggregateHandler],
+  ['Projection', projectionHandler],
 ]);
 
 // ─── Helper Functions ───────────────────────────────────────────────────────
